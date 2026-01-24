@@ -36,3 +36,31 @@ def planner_node(state: AgentState):
         syllabus = []
         
     return {"syllabus": syllabus, "retry_count": retry}
+
+
+    # --- Finder Node ---
+def finder_node(state: AgentState):
+    print("\n--- FINDER (Tavily) ---")
+    syllabus = state.get("syllabus", [])
+    resources = []
+    
+    # Initialize Client inside node to ensure env var is loaded
+    tavily = TavilyClient(api_key=os.environ["TAVILY_API_KEY"])
+    
+    try:
+        for module in syllabus:
+            print(f"   ...searching for: {module}")
+            response = tavily.search(query=f"academic resources for {module}", max_results=1, search_depth="advanced")
+            
+            if response.get('results'):
+                r = response['results'][0]
+                resources.append(Resource(
+                    title=r.get('title', module),
+                    url=r.get('url', '#'),
+                    type="Web Source"
+                ))
+    except Exception as e:
+        print(f" Tavily Error: {e}")
+        
+    print(f"   Found {len(resources)} resources.")
+    return {"resources": resources}
