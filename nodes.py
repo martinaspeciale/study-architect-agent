@@ -2,7 +2,7 @@ import os
 import json
 import re
 from langchain_core.messages import HumanMessage
-from state import AgentState
+from state import AgentState, Resource
 from model import llm
 from tavily import TavilyClient
 
