@@ -4,6 +4,7 @@ import re
 from langchain_core.messages import HumanMessage
 from state import AgentState
 from model import llm
+from tavily import TavilyClient
 
 # --- Helper for Robust Parsing ---
 def extract_json(text):
