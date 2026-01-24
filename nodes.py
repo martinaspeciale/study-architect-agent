@@ -64,3 +64,32 @@ def finder_node(state: AgentState):
         
     print(f"   Found {len(resources)} resources.")
     return {"resources": resources}
+
+
+# --- Judge Node ---
+def judge_node(state: AgentState):
+    print("\n--- JUDGE ---")
+    resources = state.get("resources", [])
+    
+    if not resources:
+        return {"is_approved": False, "feedback": "No resources found via Tavily."}
+
+    prompt = f"""Evaluate this study plan.
+    Syllabus: {state['syllabus']}
+    Resources Found: {len(resources)}
+    
+    Rules:
+    1. Syllabus must have at least 3 items.
+    2. Resources must be present.
+    
+    Return JSON ONLY: {{"approved": true, "feedback": "..."}}
+    """
+    
+    response = llm.invoke([HumanMessage(content=prompt)])
+    
+    try:
+        content = extract_json(response.content)
+        result = json.loads(content)
+        return {"is_approved": result["approved"], "feedback": result["feedback"]}
+    except:
+        return {"is_approved": False, "feedback": "Judge parsing error"}
