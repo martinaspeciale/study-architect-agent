@@ -1,20 +1,6 @@
-# Core Frameworks
 langchain>=0.3.0
 langgraph>=0.2.0
-langchain-openai>=0.2.0  # O langchain-ollama per modelli locali (Slide 168)
-langchain-groq 
-
-# Data Validation & State Management (Slide 54, 193)
+langchain-groq
 pydantic>=2.0.0
-
-# Tools & Utilities (Slide 52, 108)
-tavily-python          # Per il Resource Finder (Search Tool)
-wikipedia              # Tool alternativo per fonti accademiche
-python-dotenv          # Gestione chiavi API e configurazioni
-
-# Observability & Tracing (Slide 265)
-langsmith              # Per il tracing OTEL-compatible (Slide 20)
-pandas                 # Analisi dei log e delle metriche (Slide 276)
-
-# UI for Demonstration (Slide 361)
-streamlit              # Per mostrare il "Thinking Process" agli studenti
+tavily-python
+python-dotenv
