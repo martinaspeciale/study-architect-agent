@@ -124,6 +124,7 @@ def web_finder_node(state: AgentState):
     print_header("WEB FINDER (Tavily)")
     web_syllabus = state.get("web_syllabus", [])
     web_resources = []
+    seen_urls = set()
     
     try:
         tavily = TavilyClient(api_key=os.environ["TAVILY_API_KEY"])
@@ -134,26 +135,36 @@ def web_finder_node(state: AgentState):
     for item in web_syllabus:
         print(f"\n    Query: '{item}'")
         try:
-            response = tavily.search(query=f"{state['topic']} {item} educational", max_results=1, search_depth="advanced")
+            response = tavily.search(query=f"{state['topic']} {item} educational", max_results=5, search_depth="advanced")
             
+            found_new_source = False
             if response.get('results'):
-                r = response['results'][0]
-                url = r.get('url', 'Unknown URL')
-                title = r.get('title', 'Unknown Title')
-                
-                print(f"      --> Found: {title}")
-                print(f"      --> Link:  {url}")
-                print(f"      [Reading]  Summarizing content...")
-                
-                sum_prompt = f"Summarize this for a student in 3 bullet points: {r.get('content', '')[:3000]}"
-                summary = llm.invoke([HumanMessage(content=sum_prompt)]).content.strip()
-                
-                web_resources.append(Resource(
-                    title=title,
-                    url=url,
-                    summary=summary,
-                    type="Web Source"
-                ))
+                for r in response['results']:
+                    url = r.get('url')
+                    title = r.get('title')
+                    
+                    if url not in seen_urls: # <--- CHECK: Have we used this yet?
+                        # Found a unique source! Process it.
+                        print(f"      --> Found: {title}")
+                        print(f"      --> Link:  {url}")
+                        print(f"      [Reading]  Summarizing content...")
+                        
+                        sum_prompt = f"Summarize this for a student in 3 bullet points: {r.get('content', '')[:3000]}"
+                        summary = llm.invoke([HumanMessage(content=sum_prompt)]).content.strip()
+
+                        web_resources.append(Resource(
+                            title=title,
+                            url=url,
+                            summary=summary,
+                            type="Web Source"
+                        ))
+
+                        seen_urls.add(url) # <- Don't use this URL again
+                        found_new_source = True
+                        break # stop looking for this query, move to next item
+
+                if not found_new_source:
+                    print("      [Result] Only duplicate sources found. Skipping.")
             else:
                 print("      [Result] No good results found.")
                 
