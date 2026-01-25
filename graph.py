@@ -50,8 +50,11 @@ if __name__ == "__main__":
     
     # Start the graph
     for event in app.stream(initial_state):
-        # logs are handled inside nodes.py
-        pass 
+        # expose state transitions and inter-agent message passing in CLI
+        for node_name, output_data in event.items():
+            print(f"\n📨 MESSAGE PASSING (From: {node_name.upper()})")
+            print(f"   Payload: {output_data}")
+            print("-" * 40)
         
     print("\n" + "="*40)
     print("PROCESS COMPLETED")
