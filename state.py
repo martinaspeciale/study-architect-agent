@@ -13,6 +13,8 @@ class AgentState(TypedDict):
     topic: str
     syllabus: List[str]
     resources: List[Resource]
+    local_resources: List[Resource] 
+    web_syllabus: List[str]
     feedback: Optional[str]
     is_approved: bool
     retry_count: int

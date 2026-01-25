@@ -5,3 +5,6 @@ pydantic>=2.0.0
 tavily-python
 python-dotenv
 python-docx
+pypdf 
+langchain-community 
+docx2txt
