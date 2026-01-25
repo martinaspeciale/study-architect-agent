@@ -9,6 +9,7 @@ from model import llm
 from tavily import TavilyClient
 from docx import Document
 from docx.shared import RGBColor
+from logger import logger 
 
 # --- Helper for Robust Parsing ---
 def extract_json(text):
@@ -33,14 +34,11 @@ def extract_json(text):
     # Fallback: Return original text and hope it works
     return text
 
-# --- Visual Helper ---
-def print_header(text):
-    print(f"\n{f' --- {text} --- ':^85}")
-
 
 # --- ORCHESTRATOR (Router) ---
 def topic_router_node(state: AgentState):
-    print_header("ORCHESTRATOR (Router)")
+    logger.log_event("ROUTER", "START", "Analyzing Topic Intent")
+
     topic = state["topic"]
     
     # We use the LLM to decide based on nuance, not just keywords
@@ -65,10 +63,9 @@ def topic_router_node(state: AgentState):
         search_type = data.get("type", "GENERAL").lower()
     except:
         search_type = "general"
-        
-    print(f"   [Routing] Analysis complete.")
-    print(f"   [Decision] Treating topic as '{search_type.upper()}'.")
-    
+
+    logger.log_event("ROUTER", "RESULT", f"Routing to '{search_type.upper()}' strategy.", metadata={"type": search_type})
+
     return {"search_type": search_type}
 
 # --- Init Node (User Input + File Selection) ---
@@ -209,17 +206,17 @@ def web_finder_node(state: AgentState):
 
 # --- Judge Node (Validate Local Relevance) ---
 def judge_node(state: AgentState):
-    print_header("JUDGE (Quality Control)")
+    logger.log_event("JUDGE", "START", "Starting Quality Control")
+
     local_res = state.get("local_resources", [])
     topic = state["topic"]
     
     if not local_res:
-        print("   [System] No local files to judge. Skipping validation.")
+        logger.log_event("JUDGE", "INFO", "No local files to judge.")
         return {"is_approved": True} 
 
-    print(f"   [Thinking] Reading {len(local_res)} documents...")
-    print(f"   [Thinking] Comparing content against topic: '{topic}'...")
-    
+    logger.log_event("JUDGE", "THOUGHT", f"Reading {len(local_res)} documents against topic '{topic}'...")
+
     context = "\n".join([f"- {r.title}: {r.summary}" for r in local_res])
     
     # Ask for a specific critique and score
@@ -245,17 +242,12 @@ def judge_node(state: AgentState):
         critique = data.get("critique", "No critique provided.")
         approved = data.get("approved", False)
         
-        # --- INTERNAL MONOLOGUE PRINTS ---
-        print(f"   [Evaluation] Relevance Score: {score}/100")
-        print(f"   [Critique]   \"{critique}\"")
-        
-        status = "APPROVED" if approved else "FLAGGED"
-        print(f"   [Verdict]    {status}")
+        logger.log_event("JUDGE", "RESULT", f"Score: {score}/100 - {critique}", metadata={"score": score, "approved": approved})
         
         return {"is_approved": approved, "feedback": critique}
         
     except Exception as e:
-        print(f"   [Error] Judge failed to parse: {e}")
+        logger.log_event("JUDGE", "ERROR", f"Failed to parse: {e}")
         return {"is_approved": True}
     
 # --- SEARCH CRITIC (Quality Gatekeeper) ---
