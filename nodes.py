@@ -5,6 +5,7 @@ from langchain_core.messages import HumanMessage
 from state import AgentState, Resource
 from model import llm
 from tavily import TavilyClient
+from docx import Document
 
 # --- Helper for Robust Parsing ---
 def extract_json(text):
@@ -107,7 +108,8 @@ def judge_node(state: AgentState):
         print(f"   Decision: {status}")
         
         return {"is_approved": result["approved"], "feedback": result["feedback"]}
-    except:
+    except Exception as e:
+        print(f"Judge Parsing Error: {e}")
         return {"is_approved": False, "feedback": "Judge parsing error"}
     
 
@@ -138,3 +140,40 @@ def human_review_node(state: AgentState):
         print("   Plan approved by Human.")
         # Clear previous feedback and proceed
         return {"feedback": None}
+    
+
+
+# --- Publisher Node ---
+def publisher_node(state: AgentState):
+    print(f"\n{' --- PUBLISHER --- ':^100}")
+    
+    topic = state["topic"]
+    filename = f"{topic.replace(' ', '_')}_Study_Plan.docx"
+    
+    # Create Document
+    doc = Document()
+    doc.add_heading(f'Study Plan: {topic}', 0)
+    
+    doc.add_heading('Syllabus', level=1)
+    for i, module in enumerate(state.get("syllabus", []), 1):
+        doc.add_paragraph(f"{i}. {module}", style='List Number')
+        
+    doc.add_heading('Curated Resources', level=1)
+    resources = state.get("resources", [])
+    
+    if resources:
+        for res in resources:
+            p = doc.add_paragraph()
+            p.add_run(f"{res.title}").bold = True
+            p.add_run(f"\nLink: {res.url}")
+    else:
+        doc.add_paragraph("No resources found.")
+        
+    # Save file
+    try:
+        doc.save(filename)
+        print(f"     Document saved: {filename}")
+        return {"final_file": filename} 
+    except Exception as e:
+        print(f"     Error saving document: {e}")
+        return {}

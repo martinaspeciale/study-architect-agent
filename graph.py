@@ -1,6 +1,6 @@
 from langgraph.graph import StateGraph, END
 from state import AgentState
-from nodes import planner_node, finder_node, judge_node, human_review_node
+from nodes import planner_node, finder_node, judge_node, human_review_node, publisher_node
 
 # --- Router Logic ---
 def human_router(state: AgentState):
@@ -16,7 +16,7 @@ def quality_router(state: AgentState):
     if state["retry_count"] > 4:
         return "end"
     if state["is_approved"]:
-        return "end"
+        return "continue" # SUCCESS -> Go to Publisher 
     return "retry"
 
 
@@ -27,6 +27,7 @@ workflow.add_node("planner", planner_node)
 workflow.add_node("human", human_review_node) # ADDED THIS NODE
 workflow.add_node("finder", finder_node)
 workflow.add_node("judge", judge_node)
+workflow.add_node("publisher", publisher_node)
 
 workflow.set_entry_point("planner")
 
@@ -51,10 +52,14 @@ workflow.add_conditional_edges(
     "judge",
     quality_router,
     {
-        "end": END,         # Approved -> Finish
-        "retry": "planner"  # Rejected -> Plan again
+        "continue": "publisher",    # Approved -> Make Doc
+        "retry": "planner",         # Rejected -> Plan again
+        "end": END                  # Failed   -> Stop
     }
 )
+
+# Publisher -> END
+workflow.add_edge("publisher", END)
 
 app = workflow.compile()
 
@@ -85,6 +90,9 @@ if __name__ == "__main__":
     for event in app.stream(initial_state):
         # expose state transitions and inter-agent message passing in CLI
         for node_name, output_data in event.items():
+            if output_data is None:
+                output_data = {}
+
             print(f"\n MESSAGE PASSING (From: {node_name.upper()})")
             print("-" * 100)
 
@@ -114,9 +122,14 @@ if __name__ == "__main__":
                      print(f"     Status: REVISION REQUESTED")
                      print(f"     User Feedback: {output_data['feedback']}")
                 else:
-                     print(f"     Status: APPROVED BY USER")            
+                     print(f"     Status: APPROVED BY USER") 
+
+            # 5. PUBLISHER 
+            elif node_name == "publisher":
+                print(f"     Action: Generating Study Guide...")
+                print(f"     Status: SAVED TO DISK (.docx)")           
             
-            # 5. Fallback 
+            # 6. Fallback 
             else:
                 print(f"   Raw Payload: {output_data}")
 
