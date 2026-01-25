@@ -9,6 +9,7 @@ from model import llm
 from tavily import TavilyClient
 from docx import Document
 from docx.shared import RGBColor
+from logger import logger 
 
 # --- Helper for Robust Parsing ---
 def extract_json(text):
@@ -33,14 +34,11 @@ def extract_json(text):
     # Fallback: Return original text and hope it works
     return text
 
-# --- Visual Helper ---
-def print_header(text):
-    print(f"\n{f' --- {text} --- ':^85}")
-
 
 # --- ORCHESTRATOR (Router) ---
 def topic_router_node(state: AgentState):
-    print_header("ORCHESTRATOR (Router)")
+    logger.log_event("ROUTER", "START", "Analyzing Topic Intent")
+
     topic = state["topic"]
     
     # We use the LLM to decide based on nuance, not just keywords
@@ -65,15 +63,14 @@ def topic_router_node(state: AgentState):
         search_type = data.get("type", "GENERAL").lower()
     except:
         search_type = "general"
-        
-    print(f"   [Routing] Analysis complete.")
-    print(f"   [Decision] Treating topic as '{search_type.upper()}'.")
-    
+
+    logger.log_event("ROUTER", "RESULT", f"Routing to '{search_type.upper()}' strategy.", metadata={"type": search_type})
+
     return {"search_type": search_type}
 
 # --- Init Node (User Input + File Selection) ---
 def init_node(state: AgentState):
-    print_header("INITIALIZATION")
+    logger.log_event("INIT", "START", "Initializing Session")
     
     topic = input("\n   What do you want to study? ").strip()
     if not topic: topic = "Agentic AI"
@@ -81,7 +78,8 @@ def init_node(state: AgentState):
     # Crea cartella se non esiste
     if not os.path.exists("knowledge_base"): os.makedirs("knowledge_base")
     
-    print(f"\n    Scanning 'knowledge_base' folder for resources on '{topic}'...")
+    logger.log_event("INIT", "ACTION", f"Scanning 'knowledge_base' for '{topic}'...")
+
     files = glob.glob("knowledge_base/*")
     selected_files = []
     
@@ -90,7 +88,6 @@ def init_node(state: AgentState):
         for i, f in enumerate(files, 1):
             print(f"      [{i}] {os.path.basename(f)}")
         
-        print("\n    Select files to include (e.g., '1,3', 'all', 'none'):")
         selection = input("      Selection: ").strip().lower()
         
         if selection == 'all':
@@ -100,24 +97,22 @@ def init_node(state: AgentState):
                 indices = [int(x.strip()) - 1 for x in selection.split(',')]
                 selected_files = [files[i] for i in indices if 0 <= i < len(files)]
             except:
-                print("       Invalid selection. Proceeding with NO local files.")
-    else:
-        print("   (No local files found)")
+                logger.log_event("INIT", "ERROR", "Invalid selection.")
 
+    logger.log_event("INIT", "RESULT", f"Topic: {topic}, Files: {len(selected_files)}")
     # Passiamo i percorsi dei file temporaneamente in 'syllabus'
     return {"topic": topic, "syllabus": selected_files} 
 
 # --- Local Miner (Extract & Summarize) ---
 def local_miner_node(state: AgentState):
-    print_header("LOCAL MINER")
+    logger.log_event("MINER", "START", "Processing Local Files")    
     files = state.get("syllabus", [])
     local_resources = []
+    files = state.get("syllabus", [])
     
     if not files:
-        print("   No local files selected. Skipping to Web Planner.")
+        logger.log_event("MINER", "INFO", "No local files selected.")
         return {"local_resources": []}
-
-    print(f"    Analyzing {len(files)} local document(s)...")
     
     for file_path in files:
         try:
@@ -130,9 +125,8 @@ def local_miner_node(state: AgentState):
                 content = loader.load()[0].page_content
             
             if content:
-                print(f"   --> Processing: {os.path.basename(file_path)}")
+                logger.log_event("MINER", "ACTION", f"Summarizing {os.path.basename(file_path)}")
                 
-                # Semplice riassunto
                 prompt = f"""
                 Analyze this document: {os.path.basename(file_path)}
                 Content Snippet: {content[:5000]}
@@ -148,13 +142,14 @@ def local_miner_node(state: AgentState):
                     type="Local Document"
                 ))
         except Exception as e:
-            print(f"    Error reading {file_path}: {e}")
+            logger.log_event("MINER", "ERROR", f"Failed to read {file_path}: {e}")
 
+    logger.log_event("MINER", "RESULT", f"Extracted {len(local_resources)} local resources.")
     return {"local_resources": local_resources}
 
 # --- Web Finder (Execute Search) ---
 def web_finder_node(state: AgentState):
-    print_header("WEB FINDER (Tavily)")
+    logger.log_event("FINDER", "START", "Searching Web (Tavily)")
     web_syllabus = state.get("web_syllabus", [])
     web_resources = []
     seen_urls = set()
@@ -162,11 +157,11 @@ def web_finder_node(state: AgentState):
     try:
         tavily = TavilyClient(api_key=os.environ["TAVILY_API_KEY"])
     except:
-        print("   [Error] API Key missing.")
+        logger.log_event("FINDER", "ERROR", "API Key missing")
         return {"resources": []}
     
     for item in web_syllabus:
-        print(f"\n    Query: '{item}'")
+        logger.log_event("FINDER", "ACTION", f"Querying: '{item}'")
         try:
             response = tavily.search(query=f"{state['topic']} {item} educational", max_results=5, search_depth="advanced")
             
@@ -178,9 +173,7 @@ def web_finder_node(state: AgentState):
                     
                     if url not in seen_urls: # <--- CHECK: Have we used this yet?
                         # Found a unique source! Process it.
-                        print(f"      --> Found: {title}")
-                        print(f"      --> Link:  {url}")
-                        print(f"      [Reading]  Summarizing content...")
+                        logger.log_event("FINDER", "THOUGHT", f"Reading: {r['title']}")
                         
                         sum_prompt = f"Summarize this for a student in 3 bullet points: {r.get('content', '')[:3000]}"
                         summary = llm.invoke([HumanMessage(content=sum_prompt)]).content.strip()
@@ -197,29 +190,26 @@ def web_finder_node(state: AgentState):
                         break # stop looking for this query, move to next item
 
                 if not found_new_source:
-                    print("      [Result] Only duplicate sources found. Skipping.")
-            else:
-                print("      [Result] No good results found.")
+                    logger.log_event("FINDER", "INFO", "No new unique sources found.")
                 
         except Exception as e:
-            print(f"      [Error] {e}")
+            logger.log_event("FINDER", "ERROR", str(e))
 
-    print(f"\n    Research Complete. Handing off {len(web_resources)} items to Publisher.")
     return {"resources": web_resources}
 
 # --- Judge Node (Validate Local Relevance) ---
 def judge_node(state: AgentState):
-    print_header("JUDGE (Quality Control)")
+    logger.log_event("JUDGE", "START", "Starting Quality Control")
+
     local_res = state.get("local_resources", [])
     topic = state["topic"]
     
     if not local_res:
-        print("   [System] No local files to judge. Skipping validation.")
+        logger.log_event("JUDGE", "INFO", "No local files to judge.")
         return {"is_approved": True} 
 
-    print(f"   [Thinking] Reading {len(local_res)} documents...")
-    print(f"   [Thinking] Comparing content against topic: '{topic}'...")
-    
+    logger.log_event("JUDGE", "THOUGHT", f"Reading {len(local_res)} documents against topic '{topic}'...")
+
     context = "\n".join([f"- {r.title}: {r.summary}" for r in local_res])
     
     # Ask for a specific critique and score
@@ -245,23 +235,18 @@ def judge_node(state: AgentState):
         critique = data.get("critique", "No critique provided.")
         approved = data.get("approved", False)
         
-        # --- INTERNAL MONOLOGUE PRINTS ---
-        print(f"   [Evaluation] Relevance Score: {score}/100")
-        print(f"   [Critique]   \"{critique}\"")
-        
-        status = "APPROVED" if approved else "FLAGGED"
-        print(f"   [Verdict]    {status}")
+        logger.log_event("JUDGE", "RESULT", f"Score: {score}/100 - {critique}", metadata={"score": score, "approved": approved})
         
         return {"is_approved": approved, "feedback": critique}
         
     except Exception as e:
-        print(f"   [Error] Judge failed to parse: {e}")
+        logger.log_event("JUDGE", "ERROR", f"Failed to parse: {e}")
         return {"is_approved": True}
     
 # --- SEARCH CRITIC (Quality Gatekeeper) ---
 # Implements "Agent-as-a-Judge" 
 def search_critic_node(state: AgentState):
-    print_header("SEARCH CRITIC (Quality Control)")
+    logger.log_event("CRITIC", "START", "Validating Research")
     
     resources = state.get("resources", [])
     search_type = state.get("search_type", "general")
@@ -269,12 +254,11 @@ def search_critic_node(state: AgentState):
     
     # 1. If no resources found at all, we MUST retry (Legacy safety net)
     if not resources:
-        print("   [Critique] No resources found. Triggering blind retry.")
+        logger.log_event("CRITIC", "ACTION", "Empty results. Triggering retry.")
         return {"web_syllabus": [f"{state['topic']} guide", f"{state['topic']} documentation"], "retry_count": retry, "is_approved": False}
 
     # 2. Evaluate Quality of Found Resources
-    print(f"   [Analysis] Evaluating {len(resources)} resources against '{search_type.upper()}' standard...")
-    
+    logger.log_event("CRITIC", "THOUGHT", f"Evaluating quality against '{search_type}' standard...")    
     context = "\n".join([f"- Title: {r.title}\n  Summary: {r.summary}" for r in resources])
     
     prompt = f"""
@@ -310,10 +294,9 @@ def search_critic_node(state: AgentState):
         approved = data.get("approved", False)
         critique = data.get("critique", "Unknown quality issue.")
         new_queries = data.get("better_queries", [])
-        
-        print(f"   [Verdict]  {' APPROVED' if approved else ' REJECTED'}")
-        print(f"   [Feedback] {critique}")
-        
+
+        logger.log_event("CRITIC", "RESULT", f"Verdict: {'APPROVED' if approved else 'REJECTED'}. {critique}")
+
         if not approved and new_queries:
             print(f"   [Correction] Optimization: {new_queries}")
             return {
@@ -325,45 +308,46 @@ def search_critic_node(state: AgentState):
         return {"is_approved": True, "feedback": critique}
         
     except Exception as e:
-        print(f"   [Error] Critic failed ({e}). Defaulting to approval.")
+        logger.log_event("CRITIC", "ERROR", "Validation failed. Approving.")
         return {"is_approved": True}
 
 # --- Human Review (HITL: Check Local Info + Judge Feedback) ---
 def human_review_node(state: AgentState):
-    print_header("HUMAN REVIEW")
+    logger.log_event("HUMAN", "START", "Waiting for User Review")
+    
     local_res = state.get("local_resources", [])
     judge_feedback = state.get("feedback", "No feedback")
-    
-    # Show Judge warning, if any 
-    if state.get("is_approved") is False:
-        print(f"    JUDGE WARNING: {judge_feedback}")
+    is_approved = state.get("is_approved", True)
+
+    # Logga l'avviso del Judge se presente
+    if not is_approved:
+        logger.log_event("HUMAN", "THOUGHT", f"JUDGE WARNING: {judge_feedback}")
+        print(f"     SYSTEM ALERT: The Judge flagged the local content: {judge_feedback}")
     
     # Show info about local files 
     if local_res:
-        print(f"    Processed {len(local_res)} local documents.")
+        logger.log_event("HUMAN", "INFO", f"Processed {len(local_res)} local documents.")
     else:
-        print("    No local knowledge found.")
+        logger.log_event("HUMAN", "INFO", "No local knowledge found.")
         
-    print("\n    Press [ENTER] to proceed with Web Research plan.")
-    user_input = input("   Instructions/Adjustments: ").strip()
+    print(f"\n    Press [ENTER] to proceed with Web Research plan.")
+    user_input = input("      Instructions/Adjustments: ").strip()
     
-    # Puliamo il feedback del judge per non confondere il Planner dopo
-    return {"feedback": user_input if user_input else None}
+    if user_input:
+        logger.log_event("HUMAN", "RESULT", f"User provided feedback: '{user_input}'")
+        return {"feedback": user_input}
+    else:
+        logger.log_event("HUMAN", "RESULT", "User approved plan without changes.")
+        return {"feedback": None}
 
 # --- Web Planner (Gap Analysis & Reasoning) ---
 def web_planner_node(state: AgentState):
-    print_header("WEB PLANNER")
+    logger.log_event("PLANNER", "START", "Gap Analysis")
     topic = state["topic"]
     local_res = state.get("local_resources", [])
     
-    print(f"   [Goal] Identify knowledge gaps for '{topic}'.")
-    
-    local_context = "Nothing."
-    if local_res:
-        local_context = "\n".join([r.summary for r in local_res])
-        print(f"   [Memory] specific knowledge found in {len(local_res)} local files.")
-    else:
-        print("   [Memory] No local context available. Starting fresh.")
+    logger.log_event("PLANNER", "THOUGHT", "Identifying missing concepts...")
+    local_context = "\n".join([r.summary for r in state.get("local_resources", [])]) if state.get("local_resources") else "None"
 
     prompt = f"""
     Topic: {topic}
@@ -380,21 +364,17 @@ def web_planner_node(state: AgentState):
     
     try:
         web_syllabus = json.loads(extract_json(response.content))
-        print(f"   [Gap Analysis] Local files missed these key areas:")
-        for item in web_syllabus:
-            print(f"       Needs external research: '{item}'")
-            
+        logger.log_event("PLANNER", "RESULT", f"Plan: {web_syllabus}")
     except:
-        web_syllabus = [f"{topic} core concepts", f"{topic} examples", f"{topic} advanced theory"]
-        print("   [Fallback] Using default search strategy.")
+        web_syllabus = [f"{topic} core concepts", f"{topic} advanced"]
         
     return {"web_syllabus": web_syllabus}
+ 
 
 
 # --- Publisher Node ---
 def publisher_node(state: AgentState):
-    print_header("PUBLISHER")
-
+    logger.log_event("PUBLISHER", "START", "Compiling Document")
     topic = state["topic"]
     # Check if the Judge approved the local content
     is_approved = state.get("is_approved", True)
@@ -444,8 +424,8 @@ def publisher_node(state: AgentState):
     # Save file
     try:
         doc.save(file_path)
-        print(f"     Document saved: {file_path}")
+        logger.log_event("PUBLISHER", "RESULT", f"Saved to {file_path}")
         return {"final_file": file_path} 
     except Exception as e:
-        print(f"     Error saving document: {e}")
+        logger.log_event("PUBLISHER", "ERROR", f"Save failed: {e}")
         return {}

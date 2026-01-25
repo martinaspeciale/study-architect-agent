@@ -5,3 +5,4 @@ __pycache__/
 knowledge_base/
 generated_plans/
 
+agent_trace.jsonl

@@ -1,6 +1,30 @@
 from langgraph.graph import StateGraph, END
 from state import AgentState
-from nodes import init_node, local_miner_node, judge_node, human_review_node, web_planner_node, web_finder_node, publisher_node
+from nodes import (
+    init_node, 
+    local_miner_node, 
+    judge_node, 
+    human_review_node, 
+    web_planner_node, 
+    web_finder_node, 
+    publisher_node,
+    search_critic_node,
+    topic_router_node   
+)
+
+# Conditional Logic Helper
+def check_critic_verdict(state: AgentState):
+    # Stop infinite loops
+    if state.get("retry_count", 0) >= 3:
+        print("   [System] Max retries reached. Publishing best effort.")
+        return "proceed"
+    
+    # Check if Critic approved
+    if state.get("is_approved", True):
+        return "proceed"
+        
+    # Otherwise loop back
+    return "loop"
 
 # --- Graph Construction ---
 workflow = StateGraph(AgentState)
@@ -10,20 +34,37 @@ workflow.add_node("init", init_node)
 workflow.add_node("local_miner", local_miner_node)
 workflow.add_node("judge", judge_node)
 workflow.add_node("human", human_review_node)
+workflow.add_node("router", topic_router_node)
 workflow.add_node("web_planner", web_planner_node)
 workflow.add_node("web_finder", web_finder_node)
+workflow.add_node("search_critic", search_critic_node) 
 workflow.add_node("publisher", publisher_node)
 
-# Hybrid Linear Flow
+# Set Entry
 workflow.set_entry_point("init")
 
-workflow.add_edge("init", "local_miner")       # Step 1: Get Topic & Files
-workflow.add_edge("local_miner", "judge")      # Step 2: Extract & Validate
-workflow.add_edge("judge", "human")            # Step 3: Show Validity & Content to User
-workflow.add_edge("human", "web_planner")      # Step 4: User Feedback -> Plan Web Search
-workflow.add_edge("web_planner", "web_finder") # Step 5: Execute Web Search
-workflow.add_edge("web_finder", "publisher")   # Step 6: Create Doc
-workflow.add_edge("publisher", END)            # Step 7: Finish
+# Linear Phase
+workflow.add_edge("init", "local_miner")
+workflow.add_edge("local_miner", "judge")
+workflow.add_edge("judge", "human")
+workflow.add_edge("human", "router")       # Router decides strategy
+workflow.add_edge("router", "web_planner") 
+workflow.add_edge("web_planner", "web_finder")
+
+# Self-Correction Loop
+workflow.add_edge("web_finder", "search_critic") # Always check quality
+
+workflow.add_conditional_edges(
+    "search_critic",
+    check_critic_verdict,
+    {
+        "proceed": "publisher",  # Good Quality -> Done
+        "loop": "web_finder"     # Bad Quality  -> Search again
+    }
+)
+
+workflow.add_edge("publisher", END)
+
 
 app = workflow.compile()
 
