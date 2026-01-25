@@ -9,3 +9,4 @@ pypdf
 langchain-community 
 docx2txt
 termcolor
+streamlit
