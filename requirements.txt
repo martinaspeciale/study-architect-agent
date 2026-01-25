@@ -4,3 +4,4 @@ langchain-groq
 pydantic>=2.0.0
 tavily-python
 python-dotenv
+python-docx
