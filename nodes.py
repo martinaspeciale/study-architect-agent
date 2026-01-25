@@ -185,32 +185,57 @@ def judge_node(state: AgentState):
         return {"is_approved": True}
 
 
-# --- Human Review Node (Human-in-the-Loop) ---
+# --- Human Review (HITL: Check Local Info + Judge Feedback) ---
 def human_review_node(state: AgentState):
     print_header("HUMAN REVIEW")
-    syllabus = state.get("syllabus", [])
+    local_res = state.get("local_resources", [])
+    judge_feedback = state.get("feedback", "No feedback")
     
-    # 1. Display the current plan to the user
-    print(f"   Proposed Plan for '{state['topic']}':")
-    for i, module in enumerate(syllabus, 1):
-        print(f"   {i}. {module}")
+    # Mostra avvisi del Judge se ce ne sono
+    if state.get("is_approved") is False:
+        print(f"    JUDGE WARNING: {judge_feedback}")
     
-    print("-" * 100)
-    
-    # 2. Request user input
-    print("   [ENTER] to approve and proceed to research.")
-    print("   [Text] to request changes (e.g., 'Remove module 2', 'Add more focus on X').")
-    user_input = input("   Your feedback: ").strip()
-    
-    # 3. Handle logic
-    if user_input:
-        print(f"   Requesting revision: '{user_input}'")
-        # Update feedback for the Planner and signal that it is NOT approved
-        return {"feedback": user_input} 
+    if local_res:
+        print(f"    Processed {len(local_res)} local documents.")
+        # ... (stesso codice precedente)
     else:
-        print("   Plan approved by Human.")
-        # Clear previous feedback and proceed
-        return {"feedback": None}
+        print("    No local knowledge found.")
+        
+    print("\n    Press [ENTER] to proceed with Web Research plan.")
+    user_input = input("   Instructions/Adjustments: ").strip()
+    
+    # Puliamo il feedback del judge per non confondere il Planner dopo
+    return {"feedback": user_input if user_input else None}
+
+# --- Web Planner (Gap Analysis) ---
+def web_planner_node(state: AgentState):
+    print_header("WEB PLANNER")
+    topic = state["topic"]
+    local_res = state.get("local_resources", [])
+    user_feedback = state.get("feedback", "")
+    
+    # Create context from local files
+    local_context = "\n".join([r.summary for r in local_res])
+    
+    prompt = f"""
+    Topic: {topic}
+    User Feedback: {user_feedback}
+    Context from Local Files: {local_context}
+    
+    Task: Identify 3 VITAL sub-topics MISSING from the local files.
+    Return JSON list ONLY: ["Web Topic 1", "Web Topic 2", "Web Topic 3"]
+    """
+    
+    print("    Analyzing gaps...")
+    response = llm.invoke([HumanMessage(content=prompt)])
+    
+    try:
+        web_syllabus = json.loads(extract_json(response.content))
+        print(f"    Web Plan: {web_syllabus}")
+    except:
+        web_syllabus = [f"{topic} key concepts", f"{topic} advanced examples"]
+        
+    return {"web_syllabus": web_syllabus}
     
 
 
