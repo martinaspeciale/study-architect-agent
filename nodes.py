@@ -216,36 +216,45 @@ def human_review_node(state: AgentState):
     # Puliamo il feedback del judge per non confondere il Planner dopo
     return {"feedback": user_input if user_input else None}
 
-# --- Web Planner (Gap Analysis) ---
+# --- Web Planner (Gap Analysis & Reasoning) ---
 def web_planner_node(state: AgentState):
     print_header("WEB PLANNER")
     topic = state["topic"]
     local_res = state.get("local_resources", [])
-    user_feedback = state.get("feedback", "")
     
-    # Create context from local files
-    local_context = "\n".join([r.summary for r in local_res])
+    print(f"   [Goal] Identify knowledge gaps for '{topic}'.")
     
+    local_context = "Nothing."
+    if local_res:
+        local_context = "\n".join([r.summary for r in local_res])
+        print(f"   [Memory] specific knowledge found in {len(local_res)} local files.")
+    else:
+        print("   [Memory] No local context available. Starting fresh.")
+
     prompt = f"""
     Topic: {topic}
-    User Feedback: {user_feedback}
-    Context from Local Files: {local_context}
+    Local Knowledge: {local_context}
     
-    Task: Identify 3 VITAL sub-topics MISSING from the local files.
-    Return JSON list ONLY: ["Web Topic 1", "Web Topic 2", "Web Topic 3"]
+    Task:
+    1. List 3 concepts MISSING from the local knowledge.
+    2. Convert these into 3 search queries.
+    
+    Return JSON list: ["query 1", "query 2", "query 3"]
     """
     
-    print("    Analyzing gaps...")
     response = llm.invoke([HumanMessage(content=prompt)])
     
     try:
         web_syllabus = json.loads(extract_json(response.content))
-        print(f"    Web Plan: {web_syllabus}")
+        print(f"   [Gap Analysis] Local files missed these key areas:")
+        for item in web_syllabus:
+            print(f"      👉 Needs external research: '{item}'")
+            
     except:
-        web_syllabus = [f"{topic} key concepts", f"{topic} advanced examples"]
+        web_syllabus = [f"{topic} core concepts", f"{topic} examples", f"{topic} advanced theory"]
+        print("   [Fallback] Using default search strategy.")
         
     return {"web_syllabus": web_syllabus}
-    
 
 
 # --- Publisher Node ---
