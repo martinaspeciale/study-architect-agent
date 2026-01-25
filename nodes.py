@@ -242,34 +242,40 @@ def web_planner_node(state: AgentState):
 # --- Publisher Node ---
 def publisher_node(state: AgentState):
     print_header("PUBLISHER")
-    
+
     topic = state["topic"]
+
+    output_folder = "generated_plans"
+    if not os.path.exists(output_folder): os.makedirs(output_folder)
+
     filename = f"{topic.replace(' ', '_')}_Study_Plan.docx"
+    file_path = os.path.join(output_folder, filename)
+
+    local_res = state.get("local_resources", [])
+    web_res = state.get("resources", [])
     
     # Create Document
     doc = Document()
     doc.add_heading(f'Study Plan: {topic}', 0)
     
-    doc.add_heading('Syllabus', level=1)
-    for i, module in enumerate(state.get("syllabus", []), 1):
-        doc.add_paragraph(f"{i}. {module}", style='List Number')
-        
-    doc.add_heading('Curated Resources', level=1)
-    resources = state.get("resources", [])
-    
-    if resources:
-        for res in resources:
-            p = doc.add_paragraph()
-            p.add_run(f"{res.title}").bold = True
-            p.add_run(f"\nLink: {res.url}")
-    else:
-        doc.add_paragraph("No resources found.")
+    if local_res:
+        doc.add_heading('Part 1: Local Library', 1)
+        for r in local_res:
+            doc.add_heading(r.title, 2)
+            doc.add_paragraph(r.summary)
+            
+    if web_res:
+        doc.add_heading('Part 2: Web Research', 1)
+        for r in web_res:
+            doc.add_heading(f" {r.title}", 2)
+            doc.add_paragraph(r.summary)
+            doc.add_paragraph(f"Link: {r.url}")
         
     # Save file
     try:
-        doc.save(filename)
-        print(f"     Document saved: {filename}")
-        return {"final_file": filename} 
+        doc.save(file_path)
+        print(f"     Document saved: {file_path}")
+        return {"final_file": file_path} 
     except Exception as e:
         print(f"     Error saving document: {e}")
         return {}
