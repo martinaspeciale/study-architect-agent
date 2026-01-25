@@ -334,13 +334,13 @@ def human_review_node(state: AgentState):
     local_res = state.get("local_resources", [])
     judge_feedback = state.get("feedback", "No feedback")
     
-    # Mostra avvisi del Judge se ce ne sono
+    # Show Judge warning, if any 
     if state.get("is_approved") is False:
         print(f"    JUDGE WARNING: {judge_feedback}")
     
+    # Show info about local files 
     if local_res:
         print(f"    Processed {len(local_res)} local documents.")
-        # ... (stesso codice precedente)
     else:
         print("    No local knowledge found.")
         
