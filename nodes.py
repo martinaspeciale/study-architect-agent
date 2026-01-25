@@ -23,34 +23,90 @@ def print_header(text):
     print(f"\n{f' --- {text} --- ':^100}")
 
 # --- Planner Node ---
-def planner_node(state: AgentState):
-    retry = state.get('retry_count', 0) + 1
-    print(f"\n --- PLANNER (Attempt {retry}) --- ".center(100))    
-    prompt = f"""You are a Senior Academic Tutor.
-    TOPIC: {state['topic']}
-    FEEDBACK: {state.get('feedback', 'None')}
+# --- Init Node (User Input + File Selection) ---
+def init_node(state: AgentState):
+    print_header("INITIALIZATION")
     
-    Create a syllabus with 4 distinct modules.
-    Return ONLY a JSON list of strings. Example: ["Module 1", "Module 2"]
-    """
+    topic = input("\n   What do you want to study? ").strip()
+    if not topic: topic = "Agentic AI"
     
-    response = llm.invoke([HumanMessage(content=prompt)])
+    # Crea cartella se non esiste
+    if not os.path.exists("knowledge_base"): os.makedirs("knowledge_base")
     
-    # Verbose Logging (Clean)
-    # print(f"PLANNER RAW RESPONSE:\n{'-'*20}\n{response.content}\n{'-'*20}")
+    print(f"\n    Scanning 'knowledge_base' folder for resources on '{topic}'...")
+    files = glob.glob("knowledge_base/*")
+    selected_files = []
     
-    try:
-        content = extract_json(response.content)
-        syllabus = json.loads(content)
-    except Exception as e:
-        print(f"Planner Parsing Error: {e}")
-        syllabus = []
+    if files:
+        print(f"   Found {len(files)} files:")
+        for i, f in enumerate(files, 1):
+            print(f"      [{i}] {os.path.basename(f)}")
         
-    return {"syllabus": syllabus, "retry_count": retry}
+        print("\n    Select files to include (e.g., '1,3', 'all', 'none'):")
+        selection = input("      Selection: ").strip().lower()
+        
+        if selection == 'all':
+            selected_files = files
+        elif selection not in ['none', '', 'no']:
+            try:
+                indices = [int(x.strip()) - 1 for x in selection.split(',')]
+                selected_files = [files[i] for i in indices if 0 <= i < len(files)]
+            except:
+                print("       Invalid selection. Proceeding with NO local files.")
+    else:
+        print("   (No local files found)")
+
+    # Passiamo i percorsi dei file temporaneamente in 'syllabus'
+    return {"topic": topic, "syllabus": selected_files} 
+
+# --- Local Miner (Extract & Summarize) ---
+def local_miner_node(state: AgentState):
+    print_header("LOCAL MINER")
+    files = state.get("syllabus", [])
+    local_resources = []
+    
+    if not files:
+        print("   No local files selected. Skipping to Web Planner.")
+        return {"local_resources": []}
+
+    print(f"    Analyzing {len(files)} local document(s)...")
+    
+    for file_path in files:
+        try:
+            content = ""
+            if file_path.lower().endswith(".pdf"):
+                loader = PyPDFLoader(file_path)
+                content = "\n".join([p.page_content for p in loader.load()])
+            elif file_path.lower().endswith(".docx"):
+                loader = Docx2txtLoader(file_path)
+                content = loader.load()[0].page_content
+            
+            if content:
+                print(f"   --> Processing: {os.path.basename(file_path)}")
+                
+                # Semplice riassunto
+                prompt = f"""
+                Analyze this document: {os.path.basename(file_path)}
+                Content Snippet: {content[:5000]}
+                
+                Task: Create a clear 3-bullet point summary of what this document teaches regarding '{state['topic']}'.
+                """
+                summary = llm.invoke([HumanMessage(content=prompt)]).content.strip()
+                
+                local_resources.append(Resource(
+                    title=f"[FILE] {os.path.basename(file_path)}",
+                    url=f"file://{file_path}",
+                    summary=summary,
+                    type="Local Document"
+                ))
+        except Exception as e:
+            print(f"    Error reading {file_path}: {e}")
+
+    return {"local_resources": local_resources}
 
 # --- Finder Node ---
 def finder_node(state: AgentState):
-    print(f"\n{' --- FINDER (Tavily)  --- ':^100}")
+    print_header("FINDER (Tavily)")
     syllabus = state.get("syllabus", [])
     resources = []
     
@@ -84,7 +140,7 @@ def finder_node(state: AgentState):
 
 # --- Judge Node ---
 def judge_node(state: AgentState):
-    print(f"\n{' --- JUDGE --- ':^100}")
+    print_header("JUDGE")
     resources = state.get("resources", [])
     
     if not resources:
@@ -122,7 +178,7 @@ def judge_node(state: AgentState):
 
 # --- Human Review Node (Human-in-the-Loop) ---
 def human_review_node(state: AgentState):
-    print(f"\n{' --- HUMAN REVIEW --- ':^100}")
+    print_header("HUMAN REVIEW")
     syllabus = state.get("syllabus", [])
     
     # 1. Display the current plan to the user
@@ -151,7 +207,7 @@ def human_review_node(state: AgentState):
 
 # --- Publisher Node ---
 def publisher_node(state: AgentState):
-    print(f"\n{' --- PUBLISHER --- ':^100}")
+    print_header("PUBLISHER")
     
     topic = state["topic"]
     filename = f"{topic.replace(' ', '_')}_Study_Plan.docx"
