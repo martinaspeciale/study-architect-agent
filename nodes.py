@@ -138,42 +138,51 @@ def finder_node(state: AgentState):
     print(f"   Total resources found: {len(resources)}")
     return {"resources": resources}
 
-# --- Judge Node ---
-def judge_node(state: AgentState):
-    print_header("JUDGE")
-    resources = state.get("resources", [])
-    
-    if not resources:
-        return {"is_approved": False, "feedback": "No resources found via Tavily."}
 
-    prompt = f"""Evaluate this study plan.
-    Syllabus: {state['syllabus']}
-    Resources Found: {len(resources)}
+# --- Judge Node (Validate Local Relevance) ---
+def judge_node(state: AgentState):
+    print_header("JUDGE (Quality Control)")
+    local_res = state.get("local_resources", [])
+    topic = state["topic"]
     
-    Rules:
-    1. Syllabus must have at least 3 items.
-    2. Resources must be present.
+    if not local_res:
+        print("   Info: No local resources to validate. Skipping.")
+        return {"is_approved": True} # Passa oltre se non ci sono file
+
+    print(f"    Validating relevance of {len(local_res)} documents against topic '{topic}'...")
     
-    Return JSON ONLY: {{"approved": true, "feedback": "..."}}
+    # Creiamo un contesto dai riassunti
+    context = "\n".join([f"- {r.title}: {r.summary}" for r in local_res])
+    
+    prompt = f"""
+    You are a Strict Academic Judge.
+    Topic: {topic}
+    Local Documents Found:
+    {context}
+    
+    Task: specificy if these documents are relevant to the topic.
+    If a document is completely off-topic (e.g., a cooking recipe for a Physics topic), mention it.
+    
+    Return JSON: {{"approved": true, "feedback": "All docs are relevant"}} 
+    OR {{"approved": false, "feedback": "Doc X seems irrelevant because..."}}
     """
     
     response = llm.invoke([HumanMessage(content=prompt)])
-
-    # Verbose Logging 
-    # print(f"JUDGE RAW RESPONSE:\n{'-'*20}\n{response.content}\n{'-'*20}")
     
     try:
         content = extract_json(response.content)
         result = json.loads(content)
+        status = "APPROVED" if result['approved'] else "WARNING ISSUED"
         
-        status = "APPROVED" if result['approved'] else "REJECTED"
-        print(f"   Decision: {status}")
+        print(f"   Verdict: {status}")
+        print(f"   Feedback: {result['feedback']}")
         
+        # Salviamo il feedback nello stato per mostrarlo all'utente dopo
         return {"is_approved": result["approved"], "feedback": result["feedback"]}
+        
     except Exception as e:
-        print(f"Judge Parsing Error: {e}")
-        return {"is_approved": False, "feedback": "Judge parsing error"}
-    
+        print(f"   Judge Error: {e}")
+        return {"is_approved": True}
 
 
 # --- Human Review Node (Human-in-the-Loop) ---
