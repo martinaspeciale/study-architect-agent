@@ -18,8 +18,7 @@ def extract_json(text):
 # --- Planner Node ---
 def planner_node(state: AgentState):
     retry = state.get('retry_count', 0) + 1
-    print(f"\n--- PLANNER (Attempt {retry}) ---")
-    
+    print(f"\n --- PLANNER (Attempt {retry}) --- ".center(100))    
     prompt = f"""You are a Senior Academic Tutor.
     TOPIC: {state['topic']}
     FEEDBACK: {state.get('feedback', 'None')}
@@ -44,7 +43,7 @@ def planner_node(state: AgentState):
 
 # --- Finder Node ---
 def finder_node(state: AgentState):
-    print("\n--- FINDER (Tavily) ---")
+    print(f"\n{' --- FINDER (Tavily)  --- ':^100}")
     syllabus = state.get("syllabus", [])
     resources = []
     
@@ -78,7 +77,7 @@ def finder_node(state: AgentState):
 
 # --- Judge Node ---
 def judge_node(state: AgentState):
-    print("\n--- JUDGE ---")
+    print(f"\n{' --- JUDGE --- ':^100}")
     resources = state.get("resources", [])
     
     if not resources:
@@ -110,3 +109,32 @@ def judge_node(state: AgentState):
         return {"is_approved": result["approved"], "feedback": result["feedback"]}
     except:
         return {"is_approved": False, "feedback": "Judge parsing error"}
+    
+
+
+# --- Human Review Node (Human-in-the-Loop) ---
+def human_review_node(state: AgentState):
+    print(f"\n{' --- HUMAN REVIEW --- ':^100}")
+    syllabus = state.get("syllabus", [])
+    
+    # 1. Display the current plan to the user
+    print(f"   Proposed Plan for '{state['topic']}':")
+    for i, module in enumerate(syllabus, 1):
+        print(f"   {i}. {module}")
+    
+    print("-" * 100)
+    
+    # 2. Request user input
+    print("   [ENTER] to approve and proceed to research.")
+    print("   [Text] to request changes (e.g., 'Remove module 2', 'Add more focus on X').")
+    user_input = input("   Your feedback: ").strip()
+    
+    # 3. Handle logic
+    if user_input:
+        print(f"   Requesting revision: '{user_input}'")
+        # Update feedback for the Planner and signal that it is NOT approved
+        return {"feedback": user_input} 
+    else:
+        print("   Plan approved by Human.")
+        # Clear previous feedback and proceed
+        return {"feedback": None}

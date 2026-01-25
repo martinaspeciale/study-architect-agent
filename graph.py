@@ -1,26 +1,59 @@
 from langgraph.graph import StateGraph, END
 from state import AgentState
-from nodes import planner_node, finder_node, judge_node
+from nodes import planner_node, finder_node, judge_node, human_review_node
 
-def router(state: AgentState):
-    if state["is_approved"] or state["retry_count"] > 3:
+# --- Router Logic ---
+def human_router(state: AgentState):
+    """Decides whether to go back to Planner (changes requested) or Finder (approved)."""
+    # If there is feedback in the last step, the user requested changes
+    if state.get("feedback"):
+        return "retry"
+    # Otherwise proceed
+    return "proceed"
+
+def quality_router(state: AgentState):
+    """The standard quality check router (Circuit Breaker)."""
+    if state["retry_count"] > 4:
+        return "end"
+    if state["is_approved"]:
         return "end"
     return "retry"
 
+
+# --- Graph Construction ---
 workflow = StateGraph(AgentState)
 
 workflow.add_node("planner", planner_node)
+workflow.add_node("human", human_review_node) # ADDED THIS NODE
 workflow.add_node("finder", finder_node)
 workflow.add_node("judge", judge_node)
 
 workflow.set_entry_point("planner")
-workflow.add_edge("planner", "finder")
+
+# Planner -> Human (User sees the draft first)
+workflow.add_edge("planner", "human")
+
+# Human -> ? (Conditional Branch)
+workflow.add_conditional_edges(
+    "human",
+    human_router,
+    {
+        "retry": "planner", # User requested changes -> Plan again
+        "proceed": "finder" # User approved -> Search resources
+    }
+)
+
+# Finder -> Judge
 workflow.add_edge("finder", "judge")
 
+# Judge -> ? (Quality Conditional Branch)
 workflow.add_conditional_edges(
     "judge",
-    router,
-    {"end": END, "retry": "planner"}
+    quality_router,
+    {
+        "end": END,         # Approved -> Finish
+        "retry": "planner"  # Rejected -> Plan again
+    }
 )
 
 app = workflow.compile()
@@ -75,7 +108,15 @@ if __name__ == "__main__":
                 if "feedback" in output_data:
                     print(f"       Feedback: {output_data['feedback']}")
             
-            # 4. Fallback 
+            # 4. HUMAN REVIEW 
+            elif node_name == "human":
+                if output_data.get("feedback"):
+                     print(f"     Status: REVISION REQUESTED")
+                     print(f"     User Feedback: {output_data['feedback']}")
+                else:
+                     print(f"     Status: APPROVED BY USER")            
+            
+            # 5. Fallback 
             else:
                 print(f"   Raw Payload: {output_data}")
 
