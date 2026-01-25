@@ -104,13 +104,13 @@ def local_miner_node(state: AgentState):
 
     return {"local_resources": local_resources}
 
-# --- Finder Node ---
-def finder_node(state: AgentState):
-    print_header("FINDER (Tavily)")
-    syllabus = state.get("syllabus", [])
-    resources = []
+# --- Web Finder (Execute Search) ---
+def web_finder_node(state: AgentState):
+    print_header("WEB FINDER (Tavily)")
+    # Note: We now use 'web_syllabus', which comes from the Web Planner node
+    web_syllabus = state.get("web_syllabus", [])
+    web_resources = []
     
-    # Initialize Client inside node to ensure env var is loaded
     try:
         tavily = TavilyClient(api_key=os.environ["TAVILY_API_KEY"])
     except KeyError:
@@ -118,26 +118,30 @@ def finder_node(state: AgentState):
         return {"resources": []}
     
     try:
-        for module in syllabus:
-            print(f"   Searching for: '{module}'")
-            
-            response = tavily.search(query=f"academic resources for {module}", max_results=1, search_depth="advanced")
+        for item in web_syllabus:
+            print(f"   Searching for: '{item}'")
+            # We search specifically for educational content
+            response = tavily.search(query=f"{state['topic']} {item} educational", max_results=1, search_depth="advanced")
             
             if response.get('results'):
                 r = response['results'][0]
-                print(f"   --> Found: {r.get('title')}")
                 
-                resources.append(Resource(
-                    title=r.get('title', module),
+                # Generate a short summary for the web resource using the LLM
+                sum_prompt = f"Summarize this web content for a student: {r.get('content', '')[:3000]}"
+                summary = llm.invoke([HumanMessage(content=sum_prompt)]).content.strip()
+                
+                web_resources.append(Resource(
+                    title=r.get('title', item),
                     url=r.get('url', '#'),
+                    summary=summary,
                     type="Web Source"
                 ))
     except Exception as e:
         print(f"Tavily Error: {e}")
         
-    print(f"   Total resources found: {len(resources)}")
-    return {"resources": resources}
-
+    print(f"   Found {len(web_resources)} web resources.")
+    # We store these in 'resources' which the Publisher expects for the web section
+    return {"resources": web_resources}
 
 # --- Judge Node (Validate Local Relevance) ---
 def judge_node(state: AgentState):
