@@ -29,11 +29,11 @@ app = workflow.compile()
 
 if __name__ == "__main__":
     # Visual Separators
-    MAIN_DIVIDER = "═" * 100
-    SUB_DIVIDER  = "─" * 100
+    MAIN_DIVIDER = "═" * 85
+    SUB_DIVIDER  = "─" * 85
     
     print("\n" + MAIN_DIVIDER)
-    print(f"{'MULTI-AGENT STUDY ARCHITECT':^100}")
+    print(f"{'MULTI-AGENT STUDY ARCHITECT':^85}")
     print(MAIN_DIVIDER)
     
     # Initialize with empty state (init_node will handle the inputs)
@@ -109,5 +109,5 @@ if __name__ == "__main__":
             print(SUB_DIVIDER)
         
     print("\n" + MAIN_DIVIDER)
-    print(f"{'PROCESS COMPLETED':^100}")
+    print(f"{'PROCESS COMPLETED':^85}")
     print(MAIN_DIVIDER)

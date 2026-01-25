@@ -20,7 +20,7 @@ def extract_json(text):
 
 # --- Visual Helper ---
 def print_header(text):
-    print(f"\n{f' --- {text} --- ':^100}")
+    print(f"\n{f' --- {text} --- ':^85}")
 
 # --- Planner Node ---
 # --- Init Node (User Input + File Selection) ---
@@ -150,44 +150,49 @@ def judge_node(state: AgentState):
     topic = state["topic"]
     
     if not local_res:
-        print("   Info: No local resources to validate. Skipping.")
-        return {"is_approved": True} # Passa oltre se non ci sono file
+        print("   [System] No local files to judge. Skipping validation.")
+        return {"is_approved": True} 
 
-    print(f"    Validating relevance of {len(local_res)} documents against topic '{topic}'...")
+    print(f"   [Thinking] Reading {len(local_res)} documents...")
+    print(f"   [Thinking] Comparing content against topic: '{topic}'...")
     
-    # Creiamo un contesto dai riassunti
     context = "\n".join([f"- {r.title}: {r.summary}" for r in local_res])
     
+    # Ask for a specific critique and score
     prompt = f"""
-    You are a Strict Academic Judge.
+    You are a critical academic judge. 
     Topic: {topic}
-    Local Documents Found:
+    Documents:
     {context}
     
-    Task: specificy if these documents are relevant to the topic.
-    If a document is completely off-topic (e.g., a cooking recipe for a Physics topic), mention it.
+    Task: 
+    1. Score relevance from 0-100.
+    2. Provide a 1-sentence critique explaining WHY.
+    3. Verdict (Approved if score > 70).
     
-    Return JSON: {{"approved": true, "feedback": "All docs are relevant"}} 
-    OR {{"approved": false, "feedback": "Doc X seems irrelevant because..."}}
+    Return JSON: {{ "score": 85, "critique": "Files cover the basics well but miss advanced topics.", "approved": true }}
     """
     
     response = llm.invoke([HumanMessage(content=prompt)])
     
     try:
-        content = extract_json(response.content)
-        result = json.loads(content)
-        status = "APPROVED" if result['approved'] else "WARNING ISSUED"
+        data = json.loads(extract_json(response.content))
+        score = data.get("score", 0)
+        critique = data.get("critique", "No critique provided.")
+        approved = data.get("approved", False)
         
-        print(f"   Verdict: {status}")
-        print(f"   Feedback: {result['feedback']}")
+        # --- INTERNAL MONOLOGUE PRINTS ---
+        print(f"   [Evaluation] Relevance Score: {score}/100")
+        print(f"   [Critique]   \"{critique}\"")
         
-        # Salviamo il feedback nello stato per mostrarlo all'utente dopo
-        return {"is_approved": result["approved"], "feedback": result["feedback"]}
+        status = "APPROVED" if approved else "FLAGGED"
+        print(f"   [Verdict]    {status}")
+        
+        return {"is_approved": approved, "feedback": critique}
         
     except Exception as e:
-        print(f"   Judge Error: {e}")
+        print(f"   [Error] Judge failed to parse: {e}")
         return {"is_approved": True}
-
 
 # --- Human Review (HITL: Check Local Info + Judge Feedback) ---
 def human_review_node(state: AgentState):
