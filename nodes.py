@@ -8,6 +8,7 @@ from state import AgentState, Resource
 from model import llm
 from tavily import TavilyClient
 from docx import Document
+from docx.shared import RGBColor
 
 # --- Helper for Robust Parsing ---
 def extract_json(text):
@@ -121,40 +122,45 @@ def local_miner_node(state: AgentState):
 # --- Web Finder (Execute Search) ---
 def web_finder_node(state: AgentState):
     print_header("WEB FINDER (Tavily)")
-    # Note: We now use 'web_syllabus', which comes from the Web Planner node
     web_syllabus = state.get("web_syllabus", [])
     web_resources = []
     
     try:
         tavily = TavilyClient(api_key=os.environ["TAVILY_API_KEY"])
-    except KeyError:
-        print("Error: TAVILY_API_KEY missing in .env")
+    except:
+        print("   [Error] API Key missing.")
         return {"resources": []}
     
-    try:
-        for item in web_syllabus:
-            print(f"   Searching for: '{item}'")
-            # We search specifically for educational content
+    for item in web_syllabus:
+        print(f"\n    Query: '{item}'")
+        try:
             response = tavily.search(query=f"{state['topic']} {item} educational", max_results=1, search_depth="advanced")
             
             if response.get('results'):
                 r = response['results'][0]
+                url = r.get('url', 'Unknown URL')
+                title = r.get('title', 'Unknown Title')
                 
-                # Generate a short summary for the web resource using the LLM
-                sum_prompt = f"Summarize this web content for a student: {r.get('content', '')[:3000]}"
+                print(f"      --> Found: {title}")
+                print(f"      --> Link:  {url}")
+                print(f"      [Reading]  Summarizing content...")
+                
+                sum_prompt = f"Summarize this for a student in 3 bullet points: {r.get('content', '')[:3000]}"
                 summary = llm.invoke([HumanMessage(content=sum_prompt)]).content.strip()
                 
                 web_resources.append(Resource(
-                    title=r.get('title', item),
-                    url=r.get('url', '#'),
+                    title=title,
+                    url=url,
                     summary=summary,
                     type="Web Source"
                 ))
-    except Exception as e:
-        print(f"Tavily Error: {e}")
-        
-    print(f"   Found {len(web_resources)} web resources.")
-    # We store these in 'resources' which the Publisher expects for the web section
+            else:
+                print("      [Result] No good results found.")
+                
+        except Exception as e:
+            print(f"      [Error] {e}")
+
+    print(f"\n    Research Complete. Handing off {len(web_resources)} items to Publisher.")
     return {"resources": web_resources}
 
 # --- Judge Node (Validate Local Relevance) ---
@@ -262,7 +268,7 @@ def web_planner_node(state: AgentState):
         web_syllabus = json.loads(extract_json(response.content))
         print(f"   [Gap Analysis] Local files missed these key areas:")
         for item in web_syllabus:
-            print(f"      👉 Needs external research: '{item}'")
+            print(f"       Needs external research: '{item}'")
             
     except:
         web_syllabus = [f"{topic} core concepts", f"{topic} examples", f"{topic} advanced theory"]
@@ -276,6 +282,8 @@ def publisher_node(state: AgentState):
     print_header("PUBLISHER")
 
     topic = state["topic"]
+    # Check if the Judge approved the local content
+    is_approved = state.get("is_approved", True)
 
     output_folder = "generated_plans"
     if not os.path.exists(output_folder): os.makedirs(output_folder)
@@ -292,8 +300,24 @@ def publisher_node(state: AgentState):
     
     if local_res:
         doc.add_heading('Part 1: Local Library', 1)
+
+        # Add a warning note if the judge flagged them
+        if not is_approved:
+            p = doc.add_paragraph()
+            run = p.add_run("WARNING: The Judge flagged these documents as potentially irrelevant to the topic.")
+            run.font.color.rgb = RGBColor(255, 0, 0) # Red
+            run.bold = True
+
         for r in local_res:
-            doc.add_heading(r.title, 2)
+            # We create an empty heading first, then add the text 'run' to color it
+            heading = doc.add_heading(level=2)
+            run = heading.add_run(r.title)
+            
+            # If not approved, turn the title RED
+            if not is_approved:
+                run.font.color.rgb = RGBColor(255, 0, 0) # Red
+                run.text = f"{r.title} [FLAGGED]"
+
             doc.add_paragraph(r.summary)
             
     if web_res:
