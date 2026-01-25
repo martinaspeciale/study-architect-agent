@@ -8,3 +8,4 @@ python-docx
 pypdf 
 langchain-community 
 docx2txt
+termcolor
