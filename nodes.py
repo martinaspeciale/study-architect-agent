@@ -1,7 +1,9 @@
 import os
 import json
 import re
+import glob
 from langchain_core.messages import HumanMessage
+from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader, TextLoader
 from state import AgentState, Resource
 from model import llm
 from tavily import TavilyClient
@@ -15,6 +17,10 @@ def extract_json(text):
     if match:
         text = match.group(2)
     return text.strip()
+
+# --- Visual Helper ---
+def print_header(text):
+    print(f"\n{f' --- {text} --- ':^100}")
 
 # --- Planner Node ---
 def planner_node(state: AgentState):
@@ -63,28 +69,11 @@ def finder_node(state: AgentState):
             
             if response.get('results'):
                 r = response['results'][0]
-                title = r.get('title', module)
-                url = r.get('url', '#')
-                raw_content = r.get('content', '')
-
-                print(f"   --> Found: {title}")
-                print(f"       Generating summary...")
-
-                summary_prompt = f"""
-                You are an expert summarizer.
-                Source Content: {raw_content[:3000]} 
-                
-                Task: Write a concise, 3-bullet point summary of this content relevant to the topic '{module}'.
-                Output format: Just the bullet points.
-                """
-                
-                summary_response = llm.invoke([HumanMessage(content=summary_prompt)])
-                summary_text = summary_response.content.strip()
+                print(f"   --> Found: {r.get('title')}")
                 
                 resources.append(Resource(
-                    title=title,
-                    url=url,
-                    summary=summary_text, # Store the summary
+                    title=r.get('title', module),
+                    url=r.get('url', '#'),
                     type="Web Source"
                 ))
     except Exception as e:
@@ -170,31 +159,19 @@ def publisher_node(state: AgentState):
     # Create Document
     doc = Document()
     doc.add_heading(f'Study Plan: {topic}', 0)
-
-    # Section 1: Syllabus List
-    doc.add_heading('Syllabus Overview', level=1)
+    
+    doc.add_heading('Syllabus', level=1)
     for i, module in enumerate(state.get("syllabus", []), 1):
         doc.add_paragraph(f"{i}. {module}", style='List Number')
-    
-    # Section 2: Detailed Study Guide
-    doc.add_heading('Detailed Study Guide', level=1)
+        
+    doc.add_heading('Curated Resources', level=1)
     resources = state.get("resources", [])
-
+    
     if resources:
-        for i, res in enumerate(resources, 1):
-            # Title
-            doc.add_heading(f"Module {i}: {res.title}", level=2)
-            
-            # Link
-            p_link = doc.add_paragraph()
-            p_link.add_run("Source Link: ").bold = True
-            p_link.add_run(res.url).italic = True
-            
-            # Summary
-            doc.add_heading('Key Takeaways:', level=3)
-            doc.add_paragraph(res.summary)
-            
-            doc.add_paragraph("_" * 50) 
+        for res in resources:
+            p = doc.add_paragraph()
+            p.add_run(f"{res.title}").bold = True
+            p.add_run(f"\nLink: {res.url}")
     else:
         doc.add_paragraph("No resources found.")
         
