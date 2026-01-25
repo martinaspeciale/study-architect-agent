@@ -26,6 +26,33 @@ workflow.add_conditional_edges(
 app = workflow.compile()
 
 if __name__ == "__main__":
-    initial = {"topic": "Machine Learning Ethics", "retry_count": 0}
-    for event in app.stream(initial):
-        pass
+    print("\n" + "="*40)
+    print("MULTI-AGENT STUDY ARCHITECT")
+    print("="*40)
+    
+    user_topic = input("\nEnter the topic you want to study: ").strip()
+    
+    # Fallback (if user_topic not provided)
+    if not user_topic:
+        user_topic = "Machine Learning Ethics"
+        print(f"No input provided. Using default: {user_topic}")
+    
+    initial_state = {
+        "topic": user_topic, 
+        "retry_count": 0,
+        "feedback": None,
+        "is_approved": False,
+        "syllabus": [],   
+        "resources": []
+    }
+    
+    print(f"\nStarting workflow for: '{user_topic}'...\n")
+    
+    # Start the graph
+    for event in app.stream(initial_state):
+        # logs are handled inside nodes.py
+        pass 
+        
+    print("\n" + "="*40)
+    print("PROCESS COMPLETED")
+    print("="*40)
