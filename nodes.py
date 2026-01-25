@@ -63,11 +63,28 @@ def finder_node(state: AgentState):
             
             if response.get('results'):
                 r = response['results'][0]
-                print(f"   --> Found: {r.get('title')}")
+                title = r.get('title', module)
+                url = r.get('url', '#')
+                raw_content = r.get('content', '')
+
+                print(f"   --> Found: {title}")
+                print(f"       Generating summary...")
+
+                summary_prompt = f"""
+                You are an expert summarizer.
+                Source Content: {raw_content[:3000]} 
+                
+                Task: Write a concise, 3-bullet point summary of this content relevant to the topic '{module}'.
+                Output format: Just the bullet points.
+                """
+                
+                summary_response = llm.invoke([HumanMessage(content=summary_prompt)])
+                summary_text = summary_response.content.strip()
                 
                 resources.append(Resource(
-                    title=r.get('title', module),
-                    url=r.get('url', '#'),
+                    title=title,
+                    url=url,
+                    summary=summary_text, # Store the summary
                     type="Web Source"
                 ))
     except Exception as e:
@@ -153,19 +170,31 @@ def publisher_node(state: AgentState):
     # Create Document
     doc = Document()
     doc.add_heading(f'Study Plan: {topic}', 0)
-    
-    doc.add_heading('Syllabus', level=1)
+
+    # Section 1: Syllabus List
+    doc.add_heading('Syllabus Overview', level=1)
     for i, module in enumerate(state.get("syllabus", []), 1):
         doc.add_paragraph(f"{i}. {module}", style='List Number')
-        
-    doc.add_heading('Curated Resources', level=1)
-    resources = state.get("resources", [])
     
+    # Section 2: Detailed Study Guide
+    doc.add_heading('Detailed Study Guide', level=1)
+    resources = state.get("resources", [])
+
     if resources:
-        for res in resources:
-            p = doc.add_paragraph()
-            p.add_run(f"{res.title}").bold = True
-            p.add_run(f"\nLink: {res.url}")
+        for i, res in enumerate(resources, 1):
+            # Title
+            doc.add_heading(f"Module {i}: {res.title}", level=2)
+            
+            # Link
+            p_link = doc.add_paragraph()
+            p_link.add_run("Source Link: ").bold = True
+            p_link.add_run(res.url).italic = True
+            
+            # Summary
+            doc.add_heading('Key Takeaways:', level=3)
+            doc.add_paragraph(res.summary)
+            
+            doc.add_paragraph("_" * 50) 
     else:
         doc.add_paragraph("No resources found.")
         

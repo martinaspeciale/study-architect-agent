@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 class Resource(BaseModel):
     title: str = Field(description="Title of the academic resource")
     url: str = Field(description="URL of the resource")
+    summary: str = Field(default="No summary available.") 
     type: str = Field(description="Type of resource (Video, Article, Paper)")
 
 class AgentState(TypedDict):
