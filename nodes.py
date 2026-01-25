@@ -11,12 +11,26 @@ from docx import Document
 
 # --- Helper for Robust Parsing ---
 def extract_json(text):
-    """Extracts JSON content from raw LLM output."""
+    """
+    Extracts JSON content from raw LLM output.
+    Handles triple backticks, plain JSON, and text-embedded JSON.
+    """
     text = text.strip()
+    
+    # Try to find markdown code blocks first
     match = re.search(r"```(json)?(.*?)```", text, re.DOTALL)
     if match:
-        text = match.group(2)
-    return text.strip()
+        return match.group(2).strip()
+    
+    # If no markdown, try to find the pure JSON object (start at '{' and end at '}')
+    start_index = text.find('{')
+    end_index = text.rfind('}')
+    
+    if start_index != -1 and end_index != -1:
+        return text[start_index : end_index + 1]
+    
+    # Fallback: Return original text and hope it works
+    return text
 
 # --- Visual Helper ---
 def print_header(text):
