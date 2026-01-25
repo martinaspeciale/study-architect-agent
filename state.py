@@ -18,3 +18,5 @@ class AgentState(TypedDict):
     feedback: Optional[str]
     is_approved: bool
     retry_count: int
+    retry_count: int      # To prevent infinite loops
+    search_type: str      # 'technical' vs 'general' (The Router's decision)

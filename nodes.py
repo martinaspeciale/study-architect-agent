@@ -37,7 +37,40 @@ def extract_json(text):
 def print_header(text):
     print(f"\n{f' --- {text} --- ':^85}")
 
-# --- Planner Node ---
+
+# --- ORCHESTRATOR (Router) ---
+def topic_router_node(state: AgentState):
+    print_header("ORCHESTRATOR (Router)")
+    topic = state["topic"]
+    
+    # We use the LLM to decide based on nuance, not just keywords
+    prompt = f"""
+    Analyze the study topic: '{topic}'
+    
+    Classify it into one of these two categories:
+    
+    1. 'TECHNICAL': Requires deep understanding of systems, mathematics, architecture, implementation, or specific tools.
+       (Examples: "Transformer Architecture", "Gradient Descent", "Kubernetes Patterns", "Python AsyncIO")
+       
+    2. 'GENERAL': Focuses on concepts, history, sociology, ethics, or high-level overviews.
+       (Examples: "History of AI", "Impact of Social Media", "Introduction to Economics", "AI Ethics")
+    
+    Return JSON ONLY: {{"type": "TECHNICAL"}} or {{"type": "GENERAL"}}
+    """
+    
+    response = llm.invoke([HumanMessage(content=prompt)])
+    
+    try:
+        data = json.loads(extract_json(response.content))
+        search_type = data.get("type", "GENERAL").lower()
+    except:
+        search_type = "general"
+        
+    print(f"   [Routing] Analysis complete.")
+    print(f"   [Decision] Treating topic as '{search_type.upper()}'.")
+    
+    return {"search_type": search_type}
+
 # --- Init Node (User Input + File Selection) ---
 def init_node(state: AgentState):
     print_header("INITIALIZATION")
@@ -223,6 +256,76 @@ def judge_node(state: AgentState):
         
     except Exception as e:
         print(f"   [Error] Judge failed to parse: {e}")
+        return {"is_approved": True}
+    
+# --- SEARCH CRITIC (Quality Gatekeeper) ---
+# Implements "Agent-as-a-Judge" 
+def search_critic_node(state: AgentState):
+    print_header("SEARCH CRITIC (Quality Control)")
+    
+    resources = state.get("resources", [])
+    search_type = state.get("search_type", "general")
+    retry = state.get("retry_count", 0) + 1
+    
+    # 1. If no resources found at all, we MUST retry (Legacy safety net)
+    if not resources:
+        print("   [Critique] No resources found. Triggering blind retry.")
+        return {"web_syllabus": [f"{state['topic']} guide", f"{state['topic']} documentation"], "retry_count": retry, "is_approved": False}
+
+    # 2. Evaluate Quality of Found Resources
+    print(f"   [Analysis] Evaluating {len(resources)} resources against '{search_type.upper()}' standard...")
+    
+    context = "\n".join([f"- Title: {r.title}\n  Summary: {r.summary}" for r in resources])
+    
+    prompt = f"""
+    You are a Research Critic.
+    Topic: {state['topic']}
+    Strategy: {search_type.upper()} (User expects {search_type} depth)
+    
+    Found Resources:
+    {context}
+    
+    Task:
+    1. Are these resources sufficient and relevant?
+    2. If Strategy is TECHNICAL, do they mention code, architecture, or implementation?
+    3. If Strategy is GENERAL, do they cover concepts clearly?
+    
+    Return JSON ONLY:
+    {{
+        "approved": true,
+        "critique": "Resources are relevant."
+    }}
+    OR
+    {{
+        "approved": false,
+        "critique": "Resources are too superficial. We need more implementation details.",
+        "better_queries": ["python implementation of {state['topic']}", "{state['topic']} github code"]
+    }}
+    """
+    
+    response = llm.invoke([HumanMessage(content=prompt)])
+    
+    try:
+        data = json.loads(extract_json(response.content))
+        approved = data.get("approved", False)
+        critique = data.get("critique", "Unknown quality issue.")
+        new_queries = data.get("better_queries", [])
+        
+        print(f"   [Verdict]  {' APPROVED' if approved else ' REJECTED'}")
+        print(f"   [Feedback] {critique}")
+        
+        if not approved and new_queries:
+            print(f"   [Correction] Optimization: {new_queries}")
+            return {
+                "is_approved": False, 
+                "retry_count": retry, 
+                "web_syllabus": new_queries # Overwrite plan with better queries
+            }
+            
+        return {"is_approved": True, "feedback": critique}
+        
+    except Exception as e:
+        print(f"   [Error] Critic failed ({e}). Defaulting to approval.")
         return {"is_approved": True}
 
 # --- Human Review (HITL: Check Local Info + Judge Feedback) ---
