@@ -31,7 +31,7 @@ def planner_node(state: AgentState):
     response = llm.invoke([HumanMessage(content=prompt)])
     
     # Verbose Logging (Clean)
-    print(f"PLANNER RAW RESPONSE:\n{'-'*20}\n{response.content}\n{'-'*20}")
+    # print(f"PLANNER RAW RESPONSE:\n{'-'*20}\n{response.content}\n{'-'*20}")
     
     try:
         content = extract_json(response.content)
@@ -98,7 +98,7 @@ def judge_node(state: AgentState):
     response = llm.invoke([HumanMessage(content=prompt)])
 
     # Verbose Logging 
-    print(f"JUDGE RAW RESPONSE:\n{'-'*20}\n{response.content}\n{'-'*20}")
+    # print(f"JUDGE RAW RESPONSE:\n{'-'*20}\n{response.content}\n{'-'*20}")
     
     try:
         content = extract_json(response.content)

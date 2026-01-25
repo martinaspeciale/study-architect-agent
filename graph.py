@@ -26,9 +26,9 @@ workflow.add_conditional_edges(
 app = workflow.compile()
 
 if __name__ == "__main__":
-    print("\n" + "="*40)
+    print("\n" + "="*100)
     print("MULTI-AGENT STUDY ARCHITECT")
-    print("="*40)
+    print("="*100)
     
     user_topic = input("\nEnter the topic you want to study: ").strip()
     
@@ -52,10 +52,35 @@ if __name__ == "__main__":
     for event in app.stream(initial_state):
         # expose state transitions and inter-agent message passing in CLI
         for node_name, output_data in event.items():
-            print(f"\n📨 MESSAGE PASSING (From: {node_name.upper()})")
-            print(f"   Payload: {output_data}")
-            print("-" * 40)
+            print(f"\n MESSAGE PASSING (From: {node_name.upper()})")
+            print("-" * 100)
+
+            # 1. PLANNER (modules' list)
+            if "syllabus" in output_data and output_data["syllabus"]:
+                print("    Proposed Syllabus:")
+                for i, module in enumerate(output_data["syllabus"], 1):
+                    print(f"      {i}. {module}")
+            
+            # 2. FINDER (Resource objects' list)
+            elif "resources" in output_data and output_data["resources"]:
+                print(f"    Resources Found ({len(output_data['resources'])}):")
+                for res in output_data["resources"]:
+                    print(f"      • {res.title}")
+                    print(f"        - {res.url}")
+            
+            # 3. JUDGE (boolean + feedback)
+            elif "is_approved" in output_data:
+                status = " APPROVED" if output_data["is_approved"] else " REJECTED"
+                print(f"     Verdict: {status}")
+                if "feedback" in output_data:
+                    print(f"       Feedback: {output_data['feedback']}")
+            
+            # 4. Fallback 
+            else:
+                print(f"   Raw Payload: {output_data}")
+
+            print("-" * 100)
         
-    print("\n" + "="*40)
+    print("\n" + "="*100)
     print("PROCESS COMPLETED")
-    print("="*40)
+    print("="*100)
