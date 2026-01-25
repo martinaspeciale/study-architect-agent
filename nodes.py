@@ -72,36 +72,20 @@ def topic_router_node(state: AgentState):
 def init_node(state: AgentState):
     logger.log_event("INIT", "START", "Initializing Session")
     
-    topic = input("\n   What do you want to study? ").strip()
-    if not topic: topic = "Agentic AI"
-    
-    # Crea cartella se non esiste
-    if not os.path.exists("knowledge_base"): os.makedirs("knowledge_base")
-    
-    logger.log_event("INIT", "ACTION", f"Scanning 'knowledge_base' for '{topic}'...")
+    topic = state.get("topic", "Agentic AI")
+    # Read info passed from the Streamlit UI
+    syllabus = state.get("syllabus", [])  
 
-    files = glob.glob("knowledge_base/*")
-    selected_files = []
+    print(f"DEBUG SYSTEM: Received syllabus: {syllabus}")
     
-    if files:
-        print(f"   Found {len(files)} files:")
-        for i, f in enumerate(files, 1):
-            print(f"      [{i}] {os.path.basename(f)}")
-        
-        selection = input("      Selection: ").strip().lower()
-        
-        if selection == 'all':
-            selected_files = files
-        elif selection not in ['none', '', 'no']:
-            try:
-                indices = [int(x.strip()) - 1 for x in selection.split(',')]
-                selected_files = [files[i] for i in indices if 0 <= i < len(files)]
-            except:
-                logger.log_event("INIT", "ERROR", "Invalid selection.")
+    if not syllabus:
+        logger.log_event("INIT", "WARNING", "Syllabus is empty!")
+    else:
+        logger.log_event("INIT", "RESULT", f"Topic: {topic}, Files Loaded: {len(syllabus)}")
+    
+    return {"topic": topic, "syllabus": syllabus}
 
-    logger.log_event("INIT", "RESULT", f"Topic: {topic}, Files: {len(selected_files)}")
-    # Passiamo i percorsi dei file temporaneamente in 'syllabus'
-    return {"topic": topic, "syllabus": selected_files} 
+
 
 # --- Local Miner (Extract & Summarize) ---
 def local_miner_node(state: AgentState):
@@ -319,10 +303,8 @@ def human_review_node(state: AgentState):
     judge_feedback = state.get("feedback", "No feedback")
     is_approved = state.get("is_approved", True)
 
-    # Logga l'avviso del Judge se presente
     if not is_approved:
         logger.log_event("HUMAN", "THOUGHT", f"JUDGE WARNING: {judge_feedback}")
-        print(f"     SYSTEM ALERT: The Judge flagged the local content: {judge_feedback}")
     
     # Show info about local files 
     if local_res:
@@ -330,8 +312,7 @@ def human_review_node(state: AgentState):
     else:
         logger.log_event("HUMAN", "INFO", "No local knowledge found.")
         
-    print(f"\n    Press [ENTER] to proceed with Web Research plan.")
-    user_input = input("      Instructions/Adjustments: ").strip()
+    '''user_input = input("      Instructions/Adjustments: ").strip()
     
     if user_input:
         logger.log_event("HUMAN", "RESULT", f"User provided feedback: '{user_input}'")
@@ -339,6 +320,8 @@ def human_review_node(state: AgentState):
     else:
         logger.log_event("HUMAN", "RESULT", "User approved plan without changes.")
         return {"feedback": None}
+    '''
+    return state 
 
 # --- Web Planner (Gap Analysis & Reasoning) ---
 def web_planner_node(state: AgentState):

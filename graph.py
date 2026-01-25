@@ -11,6 +11,9 @@ from nodes import (
     search_critic_node,
     topic_router_node   
 )
+from langgraph.checkpoint.memory import MemorySaver
+
+memory = MemorySaver()
 
 # Conditional Logic Helper
 def check_critic_verdict(state: AgentState):
@@ -66,7 +69,10 @@ workflow.add_conditional_edges(
 workflow.add_edge("publisher", END)
 
 
-app = workflow.compile()
+app = workflow.compile(
+    checkpointer=memory,
+    interrupt_after=["web_planner"] 
+)
 
 if __name__ == "__main__":
     # Visual Separators
