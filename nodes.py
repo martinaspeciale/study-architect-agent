@@ -310,78 +310,99 @@ def human_review_node(state: AgentState):
         return {"feedback": None}
 
 
-# --- Web Planner (The Manager) ---
+# --- NEW: Web Planner (Tree of Thoughts Edition) ---
 def web_planner_node(state: AgentState):
-    logger.log_event("PLANNER", "START", "Architecting Hierarchical Plan")
+    logger.log_event("PLANNER", "START", "Tree of Thoughts: Generating Candidates")
     topic = state["topic"]
-    search_type = state.get("search_type", "general") # <--- Checks the Router's decision
+    search_type = state.get("search_type", "general")
     user_feedback = state.get("feedback")
     
     local_context = "\n".join([r.summary for r in state.get("local_resources", [])]) if state.get("local_resources") else "None"
-    feedback_str = f"IMPORTANT - User Instructions: {user_feedback}" if user_feedback else ""
-
-    # [Theory] Adaptive Planning (Slide 33)
-    # The agent adjusts its internal "template" based on the nature of the intent.
     
-    if search_type == "technical":
-        # Template for Coding/Engineering topics
-        structure_instruction = """
-        1. "Foundations" (Definitions, History, Core Concepts)
-        2. "Architecture & Mechanisms" (How it works, System Design, Components)
-        3. "Implementation & Practice" (Code examples, Tools, Real-world usage)
-        """
-    else:
-        # Template for History, Sociology, General Knowledge
-        structure_instruction = """
-        1. "Historical Context & Background" (Origins, Causes, Pre-conditions)
-        2. "Key Concepts or Events" (The main narrative, Important figures, Timeline)
-        3. "Impact & Legacy" (Consequences, Modern day relevance, Ethical implications)
-        """
-
-    prompt = f"""
-    You are the Principal Study Architect.
-    Topic: {topic}
-    Type: {search_type.upper()}
-    Local Knowledge Context: {local_context}
-    {feedback_str}
-
-    Task: Create a structured study plan with exactly 3 distinct SECTIONS.
-    Follow this structure strictly:
-    {structure_instruction}
-
-    For each section, provide a title, a description, and 2 specific search queries.
-
-    Return JSON strictly in this format:
+    # [Theory] ToT Step 1: Branching (Generate Multiple Perspectives)
+    # Instead of asking for 1 plan, we ask for 3 distinct approaches.
+    prompt_branches = f"""
+    You are a Study Architect. 
+    Topic: {topic} ({search_type.upper()})
+    User Feedback: {user_feedback if user_feedback else "None"}
+    
+    Step 1: Generate 3 DIFFERENT structural approaches (Candidates) for a study guide.
+    
+    - Candidate A: "Academic/Theoretical" (Focus on definitions, history, axioms)
+    - Candidate B: "Practical/Applied" (Focus on usage, tools, real-world examples)
+    - Candidate C: "Problem-Solving" (Focus on challenges, solutions, case studies)
+    
+    Return JSON:
     {{
-      "plan": [
-        {{
-          "section_title": "Section Title Here",
-          "description": "What this section covers...",
-          "queries": ["query 1", "query 2"]
-        }},
-        ... (3 sections total)
+      "candidates": [
+        {{ "id": "A", "reasoning": "...", "plan": [ {{ "section_title": "...", "queries": [...] }} ] }},
+        {{ "id": "B", "reasoning": "...", "plan": [...] }},
+        {{ "id": "C", "reasoning": "...", "plan": [...] }}
       ]
     }}
     """
     
-    response = llm.invoke([HumanMessage(content=prompt)])
+    # Generate branches
+    response_branches = llm.invoke([HumanMessage(content=prompt_branches)])
+    
+    try:
+        data = json.loads(extract_json(response_branches.content))
+        candidates = data.get("candidates", [])
+        logger.log_event("PLANNER", "THOUGHT", f"Generated {len(candidates)} candidate plans.")
+    except:
+        # Fallback if branching fails
+        return {"study_plan": [PlanSection(section_title="General", description="Fallback", queries=[f"{topic} guide"])]}
+
+    # [Theory] ToT Step 2: Evaluation & Selection (Pruning)
+    # We now ask the LLM to act as the "Judge" and pick the best one for the user's specific intent.
+    
+    eval_prompt = f"""
+    Topic: {topic}
+    Intended Strategy: {search_type.upper()}
+    User Feedback: {user_feedback}
+    
+    Review these 3 candidate plans:
+    {json.dumps(candidates, indent=2)}
+    
+    Task:
+    1. Evaluate which candidate best fits the Intended Strategy and User Feedback.
+    2. If the user asked for "Technical", prioritize Practical/Problem-Solving.
+    3. If the user asked for "General", prioritize Academic/Theoretical.
+    
+    Return JSON of the WINNING plan only:
+    {{
+      "selected_id": "B",
+      "rationale": "Matches user request for code examples...",
+      "plan": [ ... (the full plan from the chosen candidate) ... ]
+    }}
+    """
+    
+    logger.log_event("PLANNER", "THOUGHT", "Evaluator is reviewing candidates...")
+    response_eval = llm.invoke([HumanMessage(content=eval_prompt)])
     
     study_plan = []
     try:
-        data = json.loads(extract_json(response.content))
-        raw_plan = data.get("plan", [])
-        for item in raw_plan:
+        selection_data = json.loads(extract_json(response_eval.content))
+        selected_plan = selection_data.get("plan", [])
+        rationale = selection_data.get("rationale", "No rationale")
+        
+        # Convert to Pydantic
+        for item in selected_plan:
             study_plan.append(PlanSection(
                 section_title=item['section_title'],
-                description=item['description'],
+                description=item.get('description', 'Study this section'), # Robustness
                 queries=item['queries']
             ))
-        logger.log_event("PLANNER", "RESULT", f"Created {len(study_plan)} sections for {search_type} track.")
-    except Exception as e:
-        logger.log_event("PLANNER", "ERROR", f"Planning failed: {e}")
-        # Fallback
-        study_plan = [PlanSection(section_title="General Overview", description="Main concepts", queries=[f"{topic} overview", f"{topic} history"])]
+            
+        logger.log_event("PLANNER", "RESULT", f"Winner: Candidate {selection_data.get('selected_id')} | Reason: {rationale}")
         
+    except Exception as e:
+        logger.log_event("PLANNER", "ERROR", f"Selection failed: {e}")
+        # Emergency Fallback: Just take the first candidate's plan
+        raw_plan = candidates[0].get("plan", [])
+        for item in raw_plan:
+            study_plan.append(PlanSection(section_title=item['section_title'], description="Fallback", queries=item['queries']))
+
     return {"study_plan": study_plan}
  
 
