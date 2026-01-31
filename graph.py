@@ -67,6 +67,7 @@ workflow.add_edge("publisher", END)
 
 
 app = workflow.compile()
+print(app.get_graph().draw_ascii())
 
 if __name__ == "__main__":
     # Visual Separators
