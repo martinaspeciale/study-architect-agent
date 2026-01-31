@@ -1,293 +1,233 @@
 import streamlit as st
-import json
 import os
+import time
 import glob
-import time 
-from graph import app
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import StateGraph, END
+from langchain_core.messages import HumanMessage, AIMessage
 
-st.set_page_config(page_title="Study Architect Feed", layout="wide", page_icon="🎓")
+# Import dai tuoi file locali
+from state import AgentState
+from nodes import (
+    init_node, local_miner_node, judge_node, human_review_node, 
+    topic_router_node, web_planner_node, web_finder_node, 
+    search_critic_node, publisher_node
+)
 
-# --- CSS: Stile Dashboard e Log ---
+# --- CONFIGURAZIONE PAGINA ---
+st.set_page_config(layout="wide", page_title="Agentic Chat", page_icon="🧠")
+
+# --- CSS: STILE PULITO E LOGS ---
 st.markdown("""
 <style>
-    /* Dashboard Cards */
-    div[data-testid="stMetric"] {
-        background-color: #1e1e1e;
-        border: 1px solid #333;
-        padding: 10px;
+    header, footer {visibility: hidden;}
+    .block-container {padding-top: 1rem; padding-bottom: 0rem;}
+    
+    .stChatInput {
+        position: fixed; 
+        bottom: 20px; 
+        z-index: 1000; 
+        width: 58%; 
+    }
+
+    .thought-box {
+        background-color: #ffffff;
+        border: 1px solid #e0e0e0;
         border-radius: 8px;
-    }
-    /* LIVE MODE: Green Pulse */
-    .active-agent {
-        border: 2px solid #00ff00 !important;
-        background-color: #1b3a1b !important;
-        box-shadow: 0 0 15px rgba(0, 255, 0, 0.4);
-        color: #ffffff;
-        transform: scale(1.05);
-        font-weight: bold;
-    }
-    /* REPLAY MODE: Amber */
-    .replay-agent {
-        border: 2px solid #ffcc00 !important;
-        background-color: #3a3a00 !important;
-        box-shadow: 0 0 15px rgba(255, 204, 0, 0.4);
-        color: #ffffff;
-        transform: scale(1.05);
-        font-weight: bold;
-    }
-    .inactive-agent {
-        opacity: 0.3;
-        border: 1px solid #444;
-        background-color: #0e0e0e;
-        filter: grayscale(100%);
+        padding: 12px 15px;
+        margin-bottom: 10px;
+        font-family: 'Courier New', monospace; 
+        font-size: 0.85rem;
+        line-height: 1.4;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.03);
+        color: #333;
     }
     
-    /* Log Card Styling */
-    .log-container {
-        border-left: 3px solid #444;
-        padding-left: 15px;
-        margin-bottom: 20px;
+    .thought-header {
+        font-weight: 700;
+        text-transform: uppercase;
+        margin-bottom: 6px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border-bottom: 1px solid #f0f0f0;
+        padding-bottom: 4px;
+        font-size: 0.75rem;
     }
+    
+    .header-blue { color: #2563eb; border-left: 4px solid #2563eb; }
+    .header-green { color: #059669; border-left: 4px solid #059669; }
+    .header-purple { color: #7c3aed; border-left: 4px solid #7c3aed; }
+    .header-orange { color: #d97706; border-left: 4px solid #d97706; }
+    .header-red { color: #dc2626; border-left: 4px solid #dc2626; }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🎓 Agentic Study Architect: Live Feed")
+# --- INIZIALIZZAZIONE STATO ---
+if "messages" not in st.session_state: st.session_state.messages = [] 
+if "logs" not in st.session_state: st.session_state.logs = [] 
+if "thread_id" not in st.session_state: st.session_state.thread_id = "sess_v1"
+if "graph_state" not in st.session_state: st.session_state.graph_state = None
 
-# --- Session State ---
-if "logs" not in st.session_state:
-    st.session_state.logs = []
-if "is_running" not in st.session_state:
-    st.session_state.is_running = False
+# --- LOGICA GRAFO ---
+def check_verdict(state: AgentState):
+    # Logica di uscita dal loop finder-critic
+    if state.get("is_approved") or state.get("retry_count", 0) >= 2:
+        return "proceed"
+    return "loop"
 
-# --- Sidebar ---
-with st.sidebar:
-    st.header("⚙️ Mission Control")
-    topic = st.text_input("Argomento:", "Agentic AI")
+@st.cache_resource
+def get_graph():
+    workflow = StateGraph(AgentState)
+    workflow.add_node("init", init_node)
+    workflow.add_node("local_miner", local_miner_node)
+    workflow.add_node("judge", judge_node)
+    workflow.add_node("human", human_review_node)
+    workflow.add_node("router", topic_router_node)
+    workflow.add_node("web_planner", web_planner_node)
+    workflow.add_node("web_finder", web_finder_node)
+    workflow.add_node("search_critic", search_critic_node) 
+    workflow.add_node("publisher", publisher_node)
+
+    workflow.set_entry_point("init")
+    workflow.add_edge("init", "local_miner")
+    workflow.add_edge("local_miner", "judge")
+    workflow.add_edge("judge", "human")
+    workflow.add_edge("human", "router")       
+    workflow.add_edge("router", "web_planner") 
+    workflow.add_edge("web_planner", "web_finder")
+    workflow.add_edge("web_finder", "search_critic")
+    workflow.add_conditional_edges("search_critic", check_verdict, {"proceed": "publisher", "loop": "web_finder"})
+    workflow.add_edge("publisher", END)
+
+    return workflow.compile(checkpointer=MemorySaver(), interrupt_before=["human"])
+
+app_graph = get_graph()
+config = {"configurable": {"thread_id": st.session_state.thread_id}}
+
+# --- FUNZIONE VISUALE: REVERSE LOGGING CON TYPING EFFECT ---
+def stream_log_reverse(placeholder, agent_name, verbose_text, color_class="header-blue"):
+    def make_html(content, final=False):
+        cursor = "█" if not final else ""
+        return f"""<div class='thought-box {color_class}'>
+<div class='thought-header'>
+<span>⚡ {agent_name}</span>
+<span>{'COMPLETATO' if final else 'IN CORSO...'}</span>
+</div>
+<div style='white-space: pre-wrap;'>{content}{cursor}</div>
+</div>"""
     
-    if not os.path.exists("knowledge_base"): os.makedirs("knowledge_base")
-    kb_files = glob.glob("knowledge_base/*")
-    file_names = [os.path.basename(f) for f in kb_files]
+    old_logs_html = "".join(st.session_state.logs)
     
-    selected_names = st.multiselect("Knowledge Base:", file_names)
-    selected_paths = [os.path.join("knowledge_base", name) for name in selected_names]
-    
-    run_btn = st.button("🚀 Avvia Missione", type="primary")
-    
-    if os.path.exists("agent_trace.jsonl") and not st.session_state.logs:
-        st.markdown("---")
-        if st.button("📂 Ricarica Ultima Storia"):
-            if os.path.exists("agent_trace.jsonl"):
-                with open("agent_trace.jsonl", "r") as f:
-                    st.session_state.logs = [json.loads(line) for line in f.readlines()]
-
-config = {"configurable": {"thread_id": "1"}}
-
-# --- DASHBOARD (Semafori) ---
-agents_list = ["INIT", "MINER", "JUDGE", "PLANNER", "FINDER", "CRITIC", "PUBLISHER"]
-cols = st.columns(len(agents_list))
-placeholders = {agent: cols[idx].empty() for idx, agent in enumerate(agents_list)}
-
-def render_dashboard(active_node_raw, mode="live"):
-    node_map = {
-        "init": "INIT", "local_miner": "MINER", "judge": "JUDGE",
-        "web_planner": "PLANNER", "web_finder": "FINDER", 
-        "search_critic": "CRITIC", "publisher": "PUBLISHER",
-        "human": "JUDGE" 
-    }
-    active_agent = node_map.get(active_node_raw, active_node_raw.upper())
-
-    for agent in agents_list:
-        is_active = (agent == active_agent)
-        style_class = "active-agent" if mode == "live" else "replay-agent"
-        icon = "🟢 LIVE" if mode == "live" else "⏪ REPLAY"
+    # Typing effect: procediamo a blocchi di caratteri per fluidità
+    step = 4
+    for i in range(0, len(verbose_text) + step, step):
+        current_text = verbose_text[:i]
+        temp_html = make_html(current_text, final=False) + old_logs_html
+        placeholder.markdown(temp_html, unsafe_allow_html=True)
+        time.sleep(0.01)
         
-        if not is_active:
-            style_class = "inactive-agent"
-            icon = "⚪"
-        
-        placeholders[agent].markdown(f"""
-        <div class="{style_class}" style="text-align: center; padding: 10px; border-radius: 8px; transition: all 0.2s;">
-            <small>{agent}</small><br><span style="font-size:1.1em;">{icon}</span>
-        </div>
-        """, unsafe_allow_html=True)
+    final_block_html = make_html(verbose_text, final=True)
+    st.session_state.logs.insert(0, final_block_html)
+    placeholder.markdown("".join(st.session_state.logs), unsafe_allow_html=True)
 
-if not st.session_state.is_running:
-    render_dashboard("NONE")
+# --- ESECUZIONE AGENTE ---
+def run_agent(log_placeholder, user_input=None, resume=False):
+    inputs = None
+    if resume and user_input:
+        # Ripresa dopo pausa umana
+        app_graph.update_state(config, {"feedback": user_input})
+        stream_log_reverse(log_placeholder, "USER INPUT", f"Ricevuto feedback:\n> {user_input}", "header-green")
+    elif not resume:
+        # Nuova sessione
+        inputs = {"topic": user_input, "syllabus": [], "feedback": None, "retry_count": 0}
+        stream_log_reverse(log_placeholder, "SYSTEM", f"Avvio sessione per: '{user_input}'.", "header-purple")
 
-# --- AREA LOG (Placeholder Dinamico) ---
-st.markdown("---")
-feed_container = st.empty()
-
-# --- HELPER: SLOW TYPING EFFECT ---
-def stream_text(placeholder, text, prefix="", speed=0.1):
-    """Simula la scrittura a macchina. Speed regola la velocità."""
-    full_text = prefix
-    for char in text:
-        full_text += char
-        placeholder.markdown(full_text + "▌") 
-        time.sleep(speed)
-    placeholder.markdown(full_text) 
-
-def render_log_card(log_entry, animate=False):
-    """Renderizza un log con animazione per TUTTI i tipi di eventi"""
-    event = log_entry.get('event', 'INFO')
-    agent = log_entry.get('agent', 'SYSTEM')
-    content = log_entry.get('content', '')
-    
-    if event == "THOUGHT": icon, label = "🧠", f"{agent} Thinking"
-    elif event == "ACTION": icon, label = "⚡", f"{agent} Action"
-    elif event == "Result" or event == "RESULT": icon, label = "✅", f"{agent} Result"
-    elif event == "ERROR": icon, label = "❌", f"{agent} Error"
-    else: icon, label = "ℹ️", f"{agent} Info"
-
-    with st.container(border=True):
-        st.markdown(f"**{icon} {label}**")
-        
-        if animate:
-            # 1. Fase Animazione (Typing)
-            text_box = st.empty()
-            
-            # Formattiamo il testo per l'animazione
-            stream_content = content
-            if event == "ACTION":
-                stream_content = f"```\n{content}\n```"
-            elif event == "ERROR":
-                stream_content = f"**ERROR:** {content}"
-            
-            stream_text(text_box, stream_content, speed=0.1) # VELOCITÀ SCRITTURA
-            
-            # 2. Fase Snap (Sostituzione col widget finale statico)
-            text_box.empty()
-            if event == "THOUGHT": st.info(content)
-            elif event == "ACTION": st.code(content)
-            elif event == "ERROR": st.error(content)
-            else: st.write(content)
-            
-        else:
-            # Rendering statico (per la cronologia)
-            if event == "THOUGHT": st.info(content)
-            elif event == "ACTION": st.code(content)
-            elif event == "ERROR": st.error(content)
-            else: st.write(content)
-            
-        st.caption(f"Time: {log_entry.get('timestamp', '')}")
-
-# --- LOGICA DI ESECUZIONE (LIVE) ---
-if run_btn:
-    st.session_state.is_running = True
-    st.session_state.logs = [] 
-    if os.path.exists("agent_trace.jsonl"): os.remove("agent_trace.jsonl")
-    
-    initial_state = {"topic": topic, "syllabus": selected_paths, "retry_count": 0}
-    seen_lines = 0
-    
     try:
-        # Loop Streaming LangGraph
-        for event in app.stream(initial_state, config=config):
-            if not event: continue
-            
-            # 1. Aggiorna Dashboard
-            current_node = list(event.keys())[0]
-            render_dashboard(current_node, mode="live")
-            
-            # 2. Leggi Nuovi Log da JSONL
-            new_logs_batch = []
-            if os.path.exists("agent_trace.jsonl"):
-                with open("agent_trace.jsonl", "r") as f:
-                    lines = f.readlines()
-                    if len(lines) > seen_lines:
-                        new_data = lines[seen_lines:]
-                        for line in new_data:
-                            try:
-                                log_obj = json.loads(line)
-                                new_logs_batch.append(log_obj)
-                            except: pass
-                        seen_lines = len(lines)
-            
-            # 3. RENDERIZZA IL FEED (LOGICA SEQUENZIALE STABILIZZATA)
-            # Processiamo i nuovi log uno alla volta per evitare "salti" visivi
-            for log_item in new_logs_batch:
-                with feed_container.container():
-                    st.caption("▼ Live Feed (Newest First) ▼")
-                    
-                    # A. Anima il log NUOVO in cima
-                    render_log_card(log_item, animate=True)
-                    
-                    # B. Mostra subito sotto la storia VECCHIA (statica)
-                    for old_log in reversed(st.session_state.logs):
-                        render_log_card(old_log, animate=False)
+        # Stream con updates per ricevere dati ad ogni nodo
+        for event in app_graph.stream(inputs if not resume else None, config=config, stream_mode="updates"):
+            if not isinstance(event, dict): continue
+
+            for node, data in event.items():
+                if data is None: continue
                 
-                # Una volta finito di renderizzare/animare questo log, lo promuoviamo a "storia"
-                st.session_state.logs.append(log_item)
-            
-            # 4. Check Fine
-            if "publisher" in event and event["publisher"] and "final_file" in event["publisher"]["final_file"]:
-                st.balloons()
-                render_dashboard("PUBLISHER", mode="live")
-                    
-        st.session_state.is_running = False
-        st.rerun()
+                # Se data è una tupla (comune in certi checkpoint), prendi il primo elemento
+                if isinstance(data, tuple):
+                    data = data[0] if len(data) > 0 else {}
+
+                # RECUPERO PENSIERI DAL NODO
+                txt = data.get("current_node_logs", f"Agente {node} ha completato il lavoro.")
+                
+                node_style = {
+                    "init": "header-purple", "local_miner": "header-orange",
+                    "judge": "header-green", "human": "header-red",
+                    "router": "header-purple", "web_planner": "header-blue",
+                    "web_finder": "header-blue", "search_critic": "header-orange",
+                    "publisher": "header-green", "__interrupt__": "header-red"
+                }
+                color = node_style.get(node, "header-blue")
+                
+                stream_log_reverse(log_placeholder, node.upper(), txt, color)
+
+                if node == "publisher":
+                    f = data.get("final_file")
+                    if f:
+                        st.session_state.messages.append(AIMessage(content=f"✅ **Fatto!** Documento generato: `{os.path.basename(f)}`"))
 
     except Exception as e:
-        st.error(f"Errore di Esecuzione: {e}")
-        st.session_state.is_running = False
+        stream_log_reverse(log_placeholder, "DEBUG ERROR", f"Errore rilevato: {str(e)}", "header-red")
+        st.error(f"Errore nel grafo: {e}")
 
-# --- PAUSE / HUMAN FEEDBACK ---
-snapshot = app.get_state(config)
-if snapshot.next:
-    st.markdown("---")
-    current_state = snapshot.values
-    
-    queries = []
-    if "study_plan" in current_state:
-        for section in current_state["study_plan"]:
-            queries.extend(section.queries)
+    # Controllo se il grafo è in pausa
+    snapshot = app_graph.get_state(config)
+    if snapshot.next and "human" in snapshot.next:
+        st.session_state.graph_state = "WAITING"
+        fb = snapshot.values.get('feedback', 'Richiesto intervento umano.')
+        stream_log_reverse(log_placeholder, "BREAKPOINT", f"In attesa di istruzioni.\nMessaggio: {fb}", "header-red")
+        st.session_state.messages.append(AIMessage(content=f"⚠️ **Pausa.** {fb}\nScrivi qualcosa per procedere."))
     else:
-        queries = current_state.get("web_syllabus", [])
+        st.session_state.graph_state = "DONE"
 
-    with st.container(border=True):
-        st.warning("🎯 **REVISIONE PIANO DI RICERCA** (Paused)")
-        st.write("L'Agente attende approvazione per queste ricerche:")
-        
-        if queries:
-            for i, q in enumerate(queries):
-                st.markdown(f"{i+1}. `🔍 {q}`")
-        else:
-            st.write("Generating plan...")
-            
-        st.write("")
-        col_fb, col_go = st.columns([3, 1])
-        with col_fb:
-            user_feedback = st.text_input("Istruzioni per l'Agente:", key="feedback_hitl")
-        with col_go:
-            st.write("") 
-            if st.button("🚀 Conferma e Procedi", type="primary", use_container_width=True):
-                app.update_state(config, {"feedback": user_feedback}, as_node="human")
-                st.rerun()
-
-# --- HISTORY & TIME TRAVEL ---
-if not st.session_state.is_running and st.session_state.logs:
-    with feed_container.container():
-        st.caption("▼ Mission History (Complete) ▼")
-        for log in reversed(st.session_state.logs):
-            render_log_card(log, animate=False)
-            
-    st.markdown("---")
-    st.subheader("🕰️ Time Machine Debugger")
-    
-    total_steps = len(st.session_state.logs)
-    if total_steps > 0:
-        step = st.slider("Rewind Step:", 0, total_steps - 1, total_steps - 1)
-        
-        log_at_step = st.session_state.logs[step]
-        agent_at_step = log_at_step.get('agent', 'UNKNOWN')
-        
-        render_dashboard(agent_at_step, mode="replay")
-        st.info(f"**Step {step + 1}**: {agent_at_step} -> {log_at_step.get('event')}")
-        render_log_card(log_at_step, animate=False)
-        
-    files = glob.glob("generated_plans/*.docx")
+# --- LAYOUT UI ---
+with st.sidebar:
+    st.header("📂 Knowledge Base")
+    files = st.file_uploader("Carica file (PDF/TXT)", accept_multiple_files=True)
     if files:
-        latest_file = max(files, key=os.path.getctime)
-        with open(latest_file, "rb") as f:
-            st.download_button("📥 Scarica Documento Finale (DOCX)", f, file_name=os.path.basename(latest_file))
+        if not os.path.exists("knowledge_base"): os.makedirs("knowledge_base")
+        for f in files:
+            with open(f"knowledge_base/{f.name}", "wb") as w: w.write(f.getbuffer())
+        st.success(f"{len(files)} file pronti.")
+    
+    st.divider()
+    if st.button("🗑️ Reset Chat"):
+        st.session_state.clear()
+        st.rerun()
+
+chat_col, log_col = st.columns([6, 4])
+
+with log_col:
+    st.subheader("🧠 Thought Flow")
+    log_container = st.container(height=700, border=True)
+    with log_container:
+        main_log_placeholder = st.empty()
+        if st.session_state.logs:
+            main_log_placeholder.markdown("".join(st.session_state.logs), unsafe_allow_html=True)
+
+with chat_col:
+    st.subheader("💬 Study Architect")
+    chat_box = st.container(height=600)
+    with chat_box:
+        for m in st.session_state.messages:
+            role = "user" if isinstance(m, HumanMessage) else "assistant"
+            with st.chat_message(role): st.write(m.content)
+
+    prompt = st.chat_input("Di cosa vuoi parlare?")
+    
+    if prompt:
+        st.session_state.messages.append(HumanMessage(content=prompt))
+        with chat_box:
+            with st.chat_message("user"): st.write(prompt)
+        
+        is_resume = (st.session_state.graph_state == "WAITING")
+        run_agent(main_log_placeholder, user_input=prompt, resume=is_resume)
+        st.rerun()
