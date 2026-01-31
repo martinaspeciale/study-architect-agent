@@ -4,7 +4,7 @@ import re
 import glob
 from langchain_core.messages import HumanMessage
 from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader, TextLoader
-from state import AgentState, Resource
+from state import AgentState, Resource, PlanSection
 from model import llm
 # [Refactor] We removed TavilyClient import because it is now encapsulated in tools.py
 from docx import Document
@@ -129,52 +129,60 @@ def local_miner_node(state: AgentState):
     return {"local_resources": local_resources}
 
 
-# --- Web Finder (Standardized Tool) ---
+# --- Web Finder (The Worker) ---
 def web_finder_node(state: AgentState):
-    logger.log_event("FINDER", "START", "Searching Web (Standardized Tool)")
-    web_syllabus = state.get("web_syllabus", [])
+    logger.log_event("FINDER", "START", "Executing Hierarchical Search")
+    
+    # [Theory] Hierarchical Execution (Slide 86)
+    # The Worker executes the DAG nodes (Sections) created by the Manager.
+    study_plan = state.get("study_plan", [])
     web_resources = []
     seen_urls = set()
     
-    for query in web_syllabus:
-        logger.log_event("FINDER", "THOUGHT", f"Invoking Tool for: '{query}'")
+    for section in study_plan:
+        logger.log_event("FINDER", "THOUGHT", f"Working on Module: {section.section_title}")
         
-        # [Refactor] Use the standardized tool
-        results = search_educational_resources.invoke(query)
-        
-        # [Refactor] Robustness Check: Handle string errors from tool
-        if isinstance(results, str):
-            if "Error" in results:
-                logger.log_event("FINDER", "WARNING", f"Tool failure: {results}")
+        for query in section.queries:
+            # 1. Execute Tool (Standardized)
+            results = search_educational_resources.invoke(query)
+            
+            if isinstance(results, str): 
+                logger.log_event("FINDER", "WARNING", f"Tool Error: {results}")
                 continue
-            logger.log_event("FINDER", "INFO", f"Unexpected tool output format: {results}")
-            continue
+                
+            # 2. Process Results
+            found_in_query = False
+            if results:
+                for r in results:
+                    url = r.get('url')
+                    if url not in seen_urls:
+                        
+                        # Contextual Summary: The "Why" is now driven by the Section Description
+                        sum_prompt = f"""
+                        Context: We are studying '{state['topic']}'.
+                        Current Module: '{section.section_title}' - {section.description}
+                        
+                        Source Content: {r.get('content', '')[:3000]}
+                        
+                        Task: Summarize how this source contributes to this specific module.
+                        Keep it concise (3 bullets).
+                        """
+                        summary = llm.invoke([HumanMessage(content=sum_prompt)]).content.strip()
 
-        found_new_source = False
-        if results:
-            for r in results:
-                url = r.get('url')
-                title = r.get('title')
-                content = r.get('content', '') 
-
-                if url not in seen_urls: 
-                    logger.log_event("FINDER", "THOUGHT", f"Reading: {title}")
-                    sum_prompt = f"Summarize this for a student in 3 bullet points: {content[:3000]}"
-                    summary = llm.invoke([HumanMessage(content=sum_prompt)]).content.strip()
-
-                    web_resources.append(Resource(
-                        title=title,
-                        url=url,
-                        summary=summary,
-                        type="Web Source"
-                    ))
-                    seen_urls.add(url)
-                    found_new_source = True
-                    break 
-
-            if not found_new_source:
-                logger.log_event("FINDER", "INFO", "Duplicate sources skipped.")
-
+                        # Tag the title with the section for the final report
+                        web_resources.append(Resource(
+                            title=f"[{section.section_title}] {r.get('title')}", 
+                            url=url,
+                            summary=summary,
+                            type="Web Source"
+                        ))
+                        seen_urls.add(url)
+                        found_in_query = True
+                        break # One good source per query is sufficient
+            
+            if not found_in_query:
+                logger.log_event("FINDER", "INFO", "No unique source found for query.")
+    
     return {"resources": web_resources}
 
 
@@ -302,40 +310,79 @@ def human_review_node(state: AgentState):
         return {"feedback": None}
 
 
-# --- Web Planner ---
+# --- Web Planner (The Manager) ---
 def web_planner_node(state: AgentState):
-    logger.log_event("PLANNER", "START", "Gap Analysis")
+    logger.log_event("PLANNER", "START", "Architecting Hierarchical Plan")
     topic = state["topic"]
-    local_res = state.get("local_resources", [])
-    
-    # [HitL] Read feedback from the state
+    search_type = state.get("search_type", "general") # <--- Checks the Router's decision
     user_feedback = state.get("feedback")
     
-    logger.log_event("PLANNER", "THOUGHT", "Identifying missing concepts...")
     local_context = "\n".join([r.summary for r in state.get("local_resources", [])]) if state.get("local_resources") else "None"
-
-    # [HitL] Inject feedback into the prompt
     feedback_str = f"IMPORTANT - User Instructions: {user_feedback}" if user_feedback else ""
 
+    # [Theory] Adaptive Planning (Slide 33)
+    # The agent adjusts its internal "template" based on the nature of the intent.
+    
+    if search_type == "technical":
+        # Template for Coding/Engineering topics
+        structure_instruction = """
+        1. "Foundations" (Definitions, History, Core Concepts)
+        2. "Architecture & Mechanisms" (How it works, System Design, Components)
+        3. "Implementation & Practice" (Code examples, Tools, Real-world usage)
+        """
+    else:
+        # Template for History, Sociology, General Knowledge
+        structure_instruction = """
+        1. "Historical Context & Background" (Origins, Causes, Pre-conditions)
+        2. "Key Concepts or Events" (The main narrative, Important figures, Timeline)
+        3. "Impact & Legacy" (Consequences, Modern day relevance, Ethical implications)
+        """
+
     prompt = f"""
+    You are the Principal Study Architect.
     Topic: {topic}
-    Local Knowledge: {local_context}
+    Type: {search_type.upper()}
+    Local Knowledge Context: {local_context}
     {feedback_str}
-    
-    Task:
-    1. List 3 concepts MISSING from the local knowledge.
-    2. Convert these into 3 search queries.
-    
-    Return JSON list: ["query 1", "query 2", "query 3"]
+
+    Task: Create a structured study plan with exactly 3 distinct SECTIONS.
+    Follow this structure strictly:
+    {structure_instruction}
+
+    For each section, provide a title, a description, and 2 specific search queries.
+
+    Return JSON strictly in this format:
+    {{
+      "plan": [
+        {{
+          "section_title": "Section Title Here",
+          "description": "What this section covers...",
+          "queries": ["query 1", "query 2"]
+        }},
+        ... (3 sections total)
+      ]
+    }}
     """
+    
     response = llm.invoke([HumanMessage(content=prompt)])
+    
+    study_plan = []
     try:
-        web_syllabus = json.loads(extract_json(response.content))
-        logger.log_event("PLANNER", "RESULT", f"Plan: {web_syllabus}")
-    except:
-        web_syllabus = [f"{topic} core concepts", f"{topic} advanced"]
+        data = json.loads(extract_json(response.content))
+        raw_plan = data.get("plan", [])
+        for item in raw_plan:
+            study_plan.append(PlanSection(
+                section_title=item['section_title'],
+                description=item['description'],
+                queries=item['queries']
+            ))
+        logger.log_event("PLANNER", "RESULT", f"Created {len(study_plan)} sections for {search_type} track.")
+    except Exception as e:
+        logger.log_event("PLANNER", "ERROR", f"Planning failed: {e}")
+        # Fallback
+        study_plan = [PlanSection(section_title="General Overview", description="Main concepts", queries=[f"{topic} overview", f"{topic} history"])]
         
-    return {"web_syllabus": web_syllabus}
+    return {"study_plan": study_plan}
  
 
 # --- Publisher Node ---
