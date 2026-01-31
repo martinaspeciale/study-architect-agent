@@ -86,6 +86,20 @@ def init_node(state: AgentState):
 
     logger.log_event("INIT", "RESULT", f"Topic: {topic}, Files: {len(selected_files)}")
     return {"topic": topic, "syllabus": selected_files} 
+    topic = state.get("topic", "Agentic AI")
+    # Read info passed from the Streamlit UI
+    syllabus = state.get("syllabus", [])  
+
+    print(f"DEBUG SYSTEM: Received syllabus: {syllabus}")
+    
+    if not syllabus:
+        logger.log_event("INIT", "WARNING", "Syllabus is empty!")
+    else:
+        logger.log_event("INIT", "RESULT", f"Topic: {topic}, Files Loaded: {len(syllabus)}")
+    
+    return {"topic": topic, "syllabus": syllabus}
+
+
 
 
 # --- Local Miner ---
@@ -309,102 +323,37 @@ def human_review_node(state: AgentState):
     '''
     return state 
 
-
-# --- NEW: Web Planner (Tree of Thoughts Edition) ---
+# --- Web Planner (Gap Analysis & Reasoning) ---
 def web_planner_node(state: AgentState):
-    logger.log_event("PLANNER", "START", "Tree of Thoughts: Generating Candidates")
+    logger.log_event("PLANNER", "START", "Gap Analysis")
     topic = state["topic"]
-    search_type = state.get("search_type", "general")
-    user_feedback = state.get("feedback")
+    local_res = state.get("local_resources", [])
     
     local_context = "\n".join([r.summary for r in state.get("local_resources", [])]) if state.get("local_resources") else "None"
-    
-    # [Theory] ToT Step 1: Branching (Generate Multiple Perspectives)
-    # Instead of asking for 1 plan, we ask for 3 distinct approaches.
-    prompt_branches = f"""
-    You are a Study Architect. 
-    Topic: {topic} ({search_type.upper()})
-    User Feedback: {user_feedback if user_feedback else "None"}
-    
-    Step 1: Generate 3 DIFFERENT structural approaches (Candidates) for a study guide.
-    
-    - Candidate A: "Academic/Theoretical" (Focus on definitions, history, axioms)
-    - Candidate B: "Practical/Applied" (Focus on usage, tools, real-world examples)
-    - Candidate C: "Problem-Solving" (Focus on challenges, solutions, case studies)
-    
-    Return JSON:
-    {{
-      "candidates": [
-        {{ "id": "A", "reasoning": "...", "plan": [ {{ "section_title": "...", "queries": [...] }} ] }},
-        {{ "id": "B", "reasoning": "...", "plan": [...] }},
-        {{ "id": "C", "reasoning": "...", "plan": [...] }}
-      ]
-    }}
-    """
-    
-    # Generate branches
-    response_branches = llm.invoke([HumanMessage(content=prompt_branches)])
-    
-    try:
-        data = json.loads(extract_json(response_branches.content))
-        candidates = data.get("candidates", [])
-        logger.log_event("PLANNER", "THOUGHT", f"Generated {len(candidates)} candidate plans.")
-    except:
-        # Fallback if branching fails
-        return {"study_plan": [PlanSection(section_title="General", description="Fallback", queries=[f"{topic} guide"])]}
 
-    # [Theory] ToT Step 2: Evaluation & Selection (Pruning)
-    # We now ask the LLM to act as the "Judge" and pick the best one for the user's specific intent.
-    
-    eval_prompt = f"""
+    prompt = f"""
     Topic: {topic}
-    Intended Strategy: {search_type.upper()}
-    User Feedback: {user_feedback}
-    
-    Review these 3 candidate plans:
-    {json.dumps(candidates, indent=2)}
+    Local Knowledge: {local_context}
     
     Task:
-    1. Evaluate which candidate best fits the Intended Strategy and User Feedback.
-    2. If the user asked for "Technical", prioritize Practical/Problem-Solving.
-    3. If the user asked for "General", prioritize Academic/Theoretical.
+    1. List 3 concepts MISSING from the local knowledge.
+    2. Convert these into 3 search queries.
     
-    Return JSON of the WINNING plan only:
-    {{
-      "selected_id": "B",
-      "rationale": "Matches user request for code examples...",
-      "plan": [ ... (the full plan from the chosen candidate) ... ]
-    }}
+    Return JSON list: ["query 1", "query 2", "query 3"]
     """
     
-    logger.log_event("PLANNER", "THOUGHT", "Evaluator is reviewing candidates...")
-    response_eval = llm.invoke([HumanMessage(content=eval_prompt)])
+    response = llm.invoke([HumanMessage(content=prompt)])
     
     study_plan = []
     try:
-        selection_data = json.loads(extract_json(response_eval.content))
-        selected_plan = selection_data.get("plan", [])
-        rationale = selection_data.get("rationale", "No rationale")
+        web_syllabus = json.loads(extract_json(response.content))
+        logger.log_event("PLANNER", "RESULT", f"Plan: {web_syllabus}")
+    except:
+        web_syllabus = [f"{topic} core concepts", f"{topic} advanced"]
         
-        # Convert to Pydantic
-        for item in selected_plan:
-            study_plan.append(PlanSection(
-                section_title=item['section_title'],
-                description=item.get('description', 'Study this section'), # Robustness
-                queries=item['queries']
-            ))
-            
-        logger.log_event("PLANNER", "RESULT", f"Winner: Candidate {selection_data.get('selected_id')} | Reason: {rationale}")
-        
-    except Exception as e:
-        logger.log_event("PLANNER", "ERROR", f"Selection failed: {e}")
-        # Emergency Fallback: Just take the first candidate's plan
-        raw_plan = candidates[0].get("plan", [])
-        for item in raw_plan:
-            study_plan.append(PlanSection(section_title=item['section_title'], description="Fallback", queries=item['queries']))
-
-    return {"study_plan": study_plan}
+    return {"web_syllabus": web_syllabus}
  
+
 
 # --- Publisher Node ---
 def publisher_node(state: AgentState):
